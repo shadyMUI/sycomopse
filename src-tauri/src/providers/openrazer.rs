@@ -170,26 +170,65 @@ mod linux {
         bounded_text, dbus::Bus, diagnostic, identities_match, unique_identity_match, valid_serial,
         MAX_DEVICES,
     };
-    use std::collections::HashSet;
+    use std::{collections::HashSet, time::Duration};
 
     const SERVICE: &str = "org.razer";
     const ROOT: &str = "/org/razer";
     const MANAGER: &str = "razer.devices";
 
     async fn manager() -> AppResult<Bus> {
-        let bus = Bus::active(SERVICE, true).await.map_err(|error| {
-            if error.code == ErrorCode::ProviderMissing {
-                AppError::new(ErrorCode::ProviderMissing, "OpenRazer non attivo sul session bus. Verificare daemon, driver e permessi manualmente; l'app non avvia il servizio.")
-            } else { error }
-        })?;
-        if !bus
-            .introspect(ROOT)
-            .await?
-            .method(MANAGER, "getDevices", "", "as")
-        {
-            return Err(invalid_data("OpenRazer non espone getDevices() -> as."));
+        let startup_error = crate::process::run(
+            "systemctl",
+            &["--user", "start", "openrazer-daemon"],
+            Duration::from_secs(5),
+        )
+        .await
+        .err();
+        let startup_detail = match &startup_error {
+            Some(error) => {
+                let detail = format!(
+                    "systemctl --user start openrazer-daemon: {:?}; {}; {}",
+                    error.code,
+                    error.message,
+                    bounded_text(error.detail.as_deref().unwrap_or("Nessun dettaglio."))
+                );
+                eprintln!("Avvio OpenRazer non riuscito: {detail}");
+                detail
+            }
+            None => "systemctl --user start openrazer-daemon: completato.".to_owned(),
+        };
+        tokio::time::sleep(Duration::from_millis(350)).await;
+
+        let result: AppResult<Bus> = async {
+            let bus = Bus::active(SERVICE, true).await?;
+            if !bus
+                .introspect(ROOT)
+                .await?
+                .method(MANAGER, "getDevices", "", "as")
+            {
+                return Err(invalid_data("OpenRazer non espone getDevices() -> as."));
+            }
+            Ok(bus)
         }
-        Ok(bus)
+        .await;
+
+        result.map_err(|error| {
+            let message = if error.code == ErrorCode::ProviderMissing {
+                "OpenRazer non attivo sul session bus dopo il tentativo di avvio automatico. Verificare openrazer-daemon.service, driver e permessi dell'utente.".to_owned()
+            } else {
+                format!(
+                    "OpenRazer non utilizzabile dopo il tentativo di avvio automatico: {}",
+                    error.message
+                )
+            };
+            let detail = format!(
+                "{startup_detail}\nDBus ({:?}): {}; {}",
+                error.code,
+                error.message,
+                bounded_text(error.detail.as_deref().unwrap_or("Nessun dettaglio."))
+            );
+            AppError::new(error.code, message).detail(detail)
+        })
     }
 
     async fn serials(bus: &Bus) -> AppResult<Vec<String>> {
@@ -500,7 +539,7 @@ mod linux {
         } else {
             SupportLevel::Partial
         };
-        let mut limitations = vec!["Unico proprietario delle scritture Razer: OpenRazer gia attivo, senza auto-activation.".to_owned(),
+        let mut limitations = vec!["Unico proprietario delle scritture Razer: OpenRazer; l'app tenta l'avvio del daemon tramite systemctl --user.".to_owned(),
             "Nessun remapping, RGB, LOD, calibrazione o selettore chimica batteria in questa versione.".to_owned(),
             "getPollRate e uno stato del daemon, non una misura fisica della frequenza.".to_owned()];
         if product == VIPER_PRODUCT {

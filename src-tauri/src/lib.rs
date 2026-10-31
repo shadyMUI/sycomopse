@@ -510,9 +510,34 @@ fn diagnostic_from_error(id: &str, provider: ProviderKind, error: &AppError) -> 
 #[cfg(feature = "desktop")]
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        if let Err(error) = window.show() {
+            eprintln!("Mostra finestra: {error}");
+        }
+        if let Err(error) = window.unminimize() {
+            eprintln!("Ripristino finestra: {error}");
+        }
+        if let Err(error) = window.set_focus() {
+            eprintln!("Focus finestra: {error}");
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn toggle_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    match (window.is_visible(), window.is_minimized()) {
+        (Ok(true), Ok(false)) => {
+            if let Err(error) = window.hide() {
+                eprintln!("Nascondi finestra: {error}");
+            }
+        }
+        (Ok(_), Ok(_)) => show_window(app),
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("Stato finestra: {error}");
+            show_window(app);
+        }
     }
 }
 
@@ -576,7 +601,7 @@ mod platform_tests {
 #[cfg(feature = "desktop")]
 fn menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
-        "open" => show_window(app),
+        "open" | "tray-open" => show_window(app),
         "surround-off" => {
             let app = app.clone();
             let state = app.state::<Arc<AppState>>().inner().clone();
@@ -586,7 +611,7 @@ fn menu_event(app: &AppHandle, event: MenuEvent) {
                     .await;
             });
         }
-        "exit" => request_exit(app.clone()),
+        "exit" | "tray-exit" => request_exit(app.clone()),
         _ => {}
     }
 }
@@ -689,21 +714,63 @@ pub fn run() {
             let state = Arc::new(AppState::new()?);
             app.manage(state.clone());
             let open = MenuItem::with_id(app, "open", "Apri", true, None::<&str>)?;
-            let off = MenuItem::with_id(app, "surround-off", "Disattiva 7.1", cfg!(target_os = "linux"), None::<&str>)?;
+            let off = MenuItem::with_id(
+                app,
+                "surround-off",
+                "Disattiva 7.1",
+                cfg!(target_os = "linux"),
+                None::<&str>,
+            )?;
             let separator = PredefinedMenuItem::separator(app)?;
             let exit = MenuItem::with_id(app, "exit", "Esci", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &off, &separator, &exit])?;
-            app.set_menu(menu.clone())?;
-            if let Some(icon) = app.default_window_icon().cloned() {
-                let tray = TrayIconBuilder::with_id("peripheral-hub")
-                    .icon(icon).tooltip("Peripheral Hub").menu(&menu).show_menu_on_left_click(false)
-                    .on_menu_event(menu_event)
-                    .on_tray_icon_event(|tray, event| {
-                        if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) {
-                            show_window(tray.app_handle());
+            let window_menu = Menu::with_items(app, &[&open, &off, &separator, &exit])?;
+            app.set_menu(window_menu)?;
+
+            let tray_open =
+                MenuItem::with_id(app, "tray-open", "Mostra / Apri", true, None::<&str>)?;
+            let tray_separator = PredefinedMenuItem::separator(app)?;
+            let tray_exit = MenuItem::with_id(app, "tray-exit", "Esci", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&tray_open, &tray_separator, &tray_exit])?;
+            let skip_release = StdMutex::new(false);
+            let tray = TrayIconBuilder::with_id("peripheral-hub")
+                .icon(tauri::include_image!("icons/32x32.png"))
+                .tooltip("Peripheral Hub")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                // Linux exposes the context menu, but does not emit these events.
+                .on_tray_icon_event(move |tray, event| match event {
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Down,
+                        ..
+                    } => {
+                        *skip_release.lock().unwrap_or_else(|error| error.into_inner()) = false;
+                    }
+                    TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        // Windows already toggled on the first release; ignore the second.
+                        *skip_release.lock().unwrap_or_else(|error| error.into_inner()) = true;
+                    }
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } => {
+                        let skip = std::mem::take(
+                            &mut *skip_release.lock().unwrap_or_else(|error| error.into_inner()),
+                        );
+                        if !skip {
+                            toggle_window(tray.app_handle());
                         }
-                    }).build(app);
-                state.tray_created.store(tray.is_ok(), Ordering::SeqCst);
+                    }
+                    _ => {}
+                })
+                .build(app);
+            match tray {
+                Ok(_) => state.tray_created.store(true, Ordering::SeqCst),
+                Err(error) => eprintln!("Impossibile creare la tray: {error}"),
             }
             #[cfg(target_os = "linux")]
             start_workers(app.handle(), &state);
@@ -711,23 +778,55 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             #[cfg(target_os = "linux")]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            {
+                if window.label() != "main" {
+                    return;
+                }
+                let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                    return;
+                };
                 api.prevent_close();
                 let window = window.clone();
                 let app = window.app_handle().clone();
                 let state = app.state::<Arc<AppState>>().inner().clone();
+                if state.shutdown_started.load(Ordering::SeqCst) {
+                    return;
+                }
                 tauri::async_runtime::spawn(async move {
-                    if state.tray_created.load(Ordering::SeqCst) && tray_host_available().await {
-                        let _ = window.hide();
-                    } else {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        state.publish(&app, |snapshot| {
-                            snapshot.diagnostics.retain(|diagnostic| diagnostic.id != "tray-unavailable");
-                            snapshot.diagnostics.push(Diagnostic::new("tray-unavailable", ProviderKind::App, AvailabilityCode::Unsupported, Severity::Warning,
-                                "Tray non utilizzabile: la finestra resta aperta. Usa Esci per ripristinare l'audio e chiudere."));
-                        }).await;
+                    let available = state.tray_created.load(Ordering::SeqCst)
+                        && tray_host_available().await;
+                    if state.shutdown_started.load(Ordering::SeqCst) {
+                        return;
                     }
+                    let hide_error = if available {
+                        match window.hide() {
+                            Ok(()) => {
+                                state.publish(&app, |snapshot| {
+                                    snapshot.diagnostics.retain(|item| item.id != "tray-unavailable");
+                                }).await;
+                                return;
+                            }
+                            Err(error) => Some(error.to_string()),
+                        }
+                    } else {
+                        None
+                    };
+                    show_window(&app);
+                    state.publish(&app, |snapshot| {
+                        snapshot.diagnostics.retain(|item| item.id != "tray-unavailable");
+                        let mut diagnostic = Diagnostic::new(
+                            "tray-unavailable", ProviderKind::App,
+                            if hide_error.is_some() { AvailabilityCode::Unknown } else { AvailabilityCode::Unsupported },
+                            Severity::Warning,
+                            if hide_error.is_some() {
+                                "Impossibile nascondere la finestra: resta aperta. Usa Esci per ripristinare l'audio e chiudere."
+                            } else {
+                                "Tray non utilizzabile: la finestra resta aperta. Usa Esci per ripristinare l'audio e chiudere."
+                            },
+                        );
+                        diagnostic.detail = hide_error;
+                        snapshot.diagnostics.push(diagnostic);
+                    }).await;
                 });
             }
             #[cfg(not(target_os = "linux"))]
@@ -741,6 +840,7 @@ pub fn run() {
             let state = app.state::<Arc<AppState>>();
             if !state.exit_ready.load(Ordering::SeqCst) {
                 api.prevent_exit();
+                #[cfg(not(target_os = "linux"))]
                 request_exit(app.clone());
             }
         }

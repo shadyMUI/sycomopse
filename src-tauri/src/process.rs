@@ -17,7 +17,7 @@ pub struct ProcessOutput {
 fn allowed(executable: &str) -> bool {
     matches!(
         executable,
-        "pw-dump" | "wpctl" | "pipewire" | "headsetcontrol" | "ratbagd"
+        "pw-dump" | "wpctl" | "pipewire" | "headsetcontrol" | "ratbagd" | "systemctl"
     )
 }
 
@@ -145,6 +145,8 @@ mod tests {
         assert!(!allowed("sudo"));
         assert!(!allowed("wpctl --help"));
         assert!(allowed("wpctl"));
+        assert!(allowed("systemctl"));
+        assert!(!allowed("systemctl --user start openrazer-daemon"));
         assert_eq!(
             owned_command("powershell").unwrap_err().code,
             ErrorCode::Validation

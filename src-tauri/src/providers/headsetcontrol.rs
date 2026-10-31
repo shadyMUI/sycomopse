@@ -72,7 +72,7 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
             .get("id_product")
             .and_then(Value::as_str)
             .and_then(hex_id);
-        let (Some(0x046d), Some(product_id)) = (vendor_id, product_id) else {
+        let (Some(0x1532), Some(product_id)) = (vendor_id, product_id) else {
             continue;
         };
         let readable = device
