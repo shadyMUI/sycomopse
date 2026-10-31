@@ -1,0 +1,17 @@
+[
+  {"id":60,"type":"PipeWire:Interface:Client","info":{"props":{"object.serial":190,"application.process.id":"1001"}}},
+  {"id":70,"type":"PipeWire:Interface:Node","info":{"state":"idle","props":{"object.serial":200,"node.name":"peripheral-hub.surround.input.4ccf058b-1487-4cda-9b5a-11a6033a5ad0","media.class":"Audio/Sink","node.virtual":true,"client.id":60,"peripheral-hub.session":"4ccf058b-1487-4cda-9b5a-11a6033a5ad0","audio.position":["FL","FR","FC","LFE","RL","RR","SL","SR"]},"params":{"Props":[{"channelVolumes":[1,1,1,1,1,1,1,1],"mute":false}]}}},
+  {"id":71,"type":"PipeWire:Interface:Node","info":{"state":"idle","props":{"object.serial":201,"node.name":"peripheral-hub.surround.playback.4ccf058b-1487-4cda-9b5a-11a6033a5ad0","media.class":"Stream/Output/Audio","node.virtual":true,"client.id":60,"peripheral-hub.session":"4ccf058b-1487-4cda-9b5a-11a6033a5ad0","audio.position":["FL","FR"]}}},
+  {"id":80,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":210,"node.id":70,"audio.channel":"FL"}}},
+  {"id":81,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":211,"node.id":70,"audio.channel":"FR"}}},
+  {"id":82,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":212,"node.id":70,"audio.channel":"FC"}}},
+  {"id":83,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":213,"node.id":70,"audio.channel":"LFE"}}},
+  {"id":84,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":214,"node.id":70,"audio.channel":"RL"}}},
+  {"id":85,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":215,"node.id":70,"audio.channel":"RR"}}},
+  {"id":86,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":216,"node.id":70,"audio.channel":"SL"}}},
+  {"id":87,"type":"PipeWire:Interface:Port","info":{"direction":"in","props":{"object.serial":217,"node.id":70,"audio.channel":"SR"}}},
+  {"id":88,"type":"PipeWire:Interface:Port","info":{"direction":"out","props":{"object.serial":218,"node.id":71,"audio.channel":"FL"}}},
+  {"id":89,"type":"PipeWire:Interface:Port","info":{"direction":"out","props":{"object.serial":219,"node.id":71,"audio.channel":"FR"}}},
+  {"id":90,"type":"PipeWire:Interface:Link","info":{"state":"paused","output-node-id":71,"output-port-id":88,"input-node-id":40,"input-port-id":50,"props":{"object.serial":300}}},
+  {"id":91,"type":"PipeWire:Interface:Link","info":{"state":"paused","output-node-id":71,"output-port-id":89,"input-node-id":40,"input-port-id":51,"props":{"object.serial":301}}}
+]

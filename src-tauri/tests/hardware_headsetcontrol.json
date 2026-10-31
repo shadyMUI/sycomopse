@@ -1,0 +1,13 @@
+{
+  "name":"HeadsetControl",
+  "api_version":"1.9",
+  "device_count":6,
+  "devices":[
+    {"device":"Fixture headset A","id_vendor":"0x046d","id_product":"0x0aff","status":"success","capabilities":["CAP_BATTERY_STATUS"],"readable_capabilities":["CAP_BATTERY_STATUS"],"battery":{"status":"BATTERY_AVAILABLE","level":64}},
+    {"device":"Fixture headset B","id_vendor":"0x046d","id_product":"0x0afe","status":"success","capabilities":["CAP_BATTERY_STATUS"],"readable_capabilities":["CAP_BATTERY_STATUS"],"battery":{"status":"BATTERY_CHARGING","level":72}},
+    {"device":"Fixture partial","id_vendor":"0x046d","id_product":"0x0afd","status":"partial","capabilities":["CAP_BATTERY_STATUS"],"readable_capabilities":["CAP_BATTERY_STATUS"],"battery":{"status":"BATTERY_AVAILABLE","level":80},"errors":{"battery":"HID timeout"}},
+    {"device":"Fixture timeout","id_vendor":"0x046d","id_product":"0x0afc","status":"success","capabilities":["CAP_BATTERY_STATUS"],"readable_capabilities":["CAP_BATTERY_STATUS"],"battery":{"status":"BATTERY_TIMEOUT","level":30}},
+    {"device":"Fixture invalid","id_vendor":"0x046d","id_product":"0x0afb","status":"success","capabilities":["CAP_BATTERY_STATUS"],"readable_capabilities":["CAP_BATTERY_STATUS"],"battery":{"status":"BATTERY_AVAILABLE","level":-1}},
+    {"device":"Fixture incomplete","id_vendor":"0x046d","id_product":"0x0afa","status":"success","capabilities":["CAP_BATTERY_STATUS"]}
+  ]
+}

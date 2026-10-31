@@ -1,0 +1,11 @@
+<node name="/org/freedesktop/ratbag1/profile/hidraw7/p3">
+  <interface name="org.freedesktop.ratbag1.Profile">
+    <property name="IsActive" type="b" access="read"/>
+    <property name="IsDirty" type="b" access="read"/>
+    <property name="Disabled" type="b" access="readwrite"/>
+    <property name="Resolutions" type="ao" access="read"/>
+    <property name="ReportRate" type="u" access="readwrite"/>
+    <property name="ReportRates" type="au" access="read"/>
+    <method name="SetActive"><arg type="u" direction="out"/></method>
+  </interface>
+</node>

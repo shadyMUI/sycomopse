@@ -1,0 +1,11 @@
+<node name="/org/freedesktop/ratbag1/device/hidraw7">
+  <interface name="org.freedesktop.ratbag1.Device">
+    <property name="Model" type="s" access="read"/>
+    <property name="DeviceType" type="u" access="read"/>
+    <property name="Name" type="s" access="read"/>
+    <property name="FirmwareVersion" type="s" access="read"/>
+    <property name="Profiles" type="ao" access="read"/>
+    <method name="Commit"><arg type="u" direction="out"/></method>
+    <signal name="Resync"/>
+  </interface>
+</node>

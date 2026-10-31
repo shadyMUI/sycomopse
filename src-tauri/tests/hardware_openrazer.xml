@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node name="/org/razer/device/FIXTURE_A">
+  <interface name="razer.device.misc">
+    <method name="getVidPid"><arg type="ai" direction="out"/></method>
+    <method name="getDeviceName"><arg type="s" direction="out"/></method>
+    <method name="getDeviceType"><arg type="s" direction="out"/></method>
+    <method name="getFirmware"><arg type="s" direction="out"/></method>
+    <method name="getPollRate"><arg type="i" direction="out"/></method>
+    <method name="setPollRate"><arg type="q" direction="in"/></method>
+    <method name="getSupportedPollRates"><arg type="aq" direction="out"/></method>
+  </interface>
+  <interface name="razer.device.dpi">
+    <method name="maxDPI"><arg type="i" direction="out"/></method>
+    <method name="getDPI"><arg type="ai" direction="out"/></method>
+    <method name="setDPI"><arg name="x" type="q" direction="in"/><arg name="y" type="q" direction="in"/></method>
+  </interface>
+  <interface name="razer.device.power">
+    <method name="getBattery"><arg type="d" direction="out"/></method>
+    <method name="isCharging"><arg type="b" direction="out"/></method>
+  </interface>
+  <interface name="org.freedesktop.DBus.Introspectable"><method name="Introspect"><arg type="s" direction="out"/></method></interface>
+</node>

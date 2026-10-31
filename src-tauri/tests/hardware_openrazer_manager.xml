@@ -1,0 +1,3 @@
+<node name="/org/razer">
+  <interface name="razer.devices"><method name="getDevices"><arg type="as" direction="out"/></method></interface>
+</node>

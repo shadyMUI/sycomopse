@@ -1,0 +1,106 @@
+# Adapted from PipeWire 1.2.7 spatializer-7.1.conf and filter-chain.conf.in.
+# https://github.com/PipeWire/pipewire/tree/1.2.7/src/daemon
+# Copyright (c) 2018 Wim Taymans
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice (including the next
+# paragraph) shall be included in all copies or substantial portions of the
+# Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+#
+# A client of the existing server, not another PipeWire daemon. No conf.d imports.
+{
+  "context.properties": {
+    "core.daemon": false,
+    "log.level": 2,
+    "application.name": "Peripheral Hub Surround",
+    "application.id": "io.peripheralhub.desktop",
+    "peripheral-hub.session": {{SESSION}}
+  },
+  "context.spa-libs": {
+    "audio.convert.*": "audioconvert/libspa-audioconvert",
+    "support.*": "support/libspa-support"
+  },
+  "context.modules": [
+    { "name": "libpipewire-module-rt", "flags": ["ifexists", "nofail"] },
+    { "name": "libpipewire-module-protocol-native" },
+    { "name": "libpipewire-module-client-node" },
+    { "name": "libpipewire-module-adapter" },
+    {
+      "name": "libpipewire-module-filter-chain",
+      "args": {
+        "node.description": "Peripheral Hub 7.1 binaurale",
+        "media.name": "Peripheral Hub 7.1 binaurale",
+        "filter.graph": {
+          "nodes": [
+            { "type": "sofa", "label": "spatializer", "name": "spFL", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 30.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spFR", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 330.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spFC", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 0.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spLFE", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 0.0, "Elevation": -60.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spRL", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 150.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spRR", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 210.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spSL", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 90.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "sofa", "label": "spatializer", "name": "spSR", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 270.0, "Elevation": 0.0, "Radius": 3.0 } },
+            { "type": "builtin", "label": "mixer", "name": "mixL", "control": { "Gain 1": 0.125, "Gain 2": 0.125, "Gain 3": 0.125, "Gain 4": 0.125, "Gain 5": 0.125, "Gain 6": 0.125, "Gain 7": 0.125, "Gain 8": 0.125 } },
+            { "type": "builtin", "label": "mixer", "name": "mixR", "control": { "Gain 1": 0.125, "Gain 2": 0.125, "Gain 3": 0.125, "Gain 4": 0.125, "Gain 5": 0.125, "Gain 6": 0.125, "Gain 7": 0.125, "Gain 8": 0.125 } }
+          ],
+          "links": [
+            { "output": "spFL:Out L", "input": "mixL:In 1" }, { "output": "spFL:Out R", "input": "mixR:In 1" },
+            { "output": "spFR:Out L", "input": "mixL:In 2" }, { "output": "spFR:Out R", "input": "mixR:In 2" },
+            { "output": "spFC:Out L", "input": "mixL:In 3" }, { "output": "spFC:Out R", "input": "mixR:In 3" },
+            { "output": "spLFE:Out L", "input": "mixL:In 4" }, { "output": "spLFE:Out R", "input": "mixR:In 4" },
+            { "output": "spRL:Out L", "input": "mixL:In 5" }, { "output": "spRL:Out R", "input": "mixR:In 5" },
+            { "output": "spRR:Out L", "input": "mixL:In 6" }, { "output": "spRR:Out R", "input": "mixR:In 6" },
+            { "output": "spSL:Out L", "input": "mixL:In 7" }, { "output": "spSL:Out R", "input": "mixR:In 7" },
+            { "output": "spSR:Out L", "input": "mixL:In 8" }, { "output": "spSR:Out R", "input": "mixR:In 8" }
+          ],
+          "inputs": ["spFL:In", "spFR:In", "spFC:In", "spLFE:In", "spRL:In", "spRR:In", "spSL:In", "spSR:In"],
+          "outputs": ["mixL:Out", "mixR:Out"]
+        },
+        "capture.props": {
+          "node.name": {{INPUT_NAME}},
+          "node.description": "Peripheral Hub 7.1 binaurale",
+          "media.class": "Audio/Sink",
+          "node.virtual": true,
+          "node.autoconnect": false,
+          "node.link-group": {{SESSION}},
+          "peripheral-hub.session": {{SESSION}},
+          "priority.session": 0,
+          "audio.channels": 8,
+          "audio.position": ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"]
+        },
+        "playback.props": {
+          "node.name": {{PLAYBACK_NAME}},
+          "media.class": "Stream/Output/Audio",
+          "node.virtual": true,
+          "node.passive": true,
+          "node.autoconnect": true,
+          "node.dont-fallback": true,
+          "node.dont-reconnect": true,
+          "stream.dont-remix": true,
+          "channelmix.disable": true,
+          "node.link-group": {{SESSION}},
+          "peripheral-hub.session": {{SESSION}},
+          "target.object": {{TARGET_OBJECT}},
+          "audio.channels": 2,
+          "audio.position": ["FL", "FR"]
+        }
+      }
+    }
+  ],
+  "context.objects": [],
+  "context.exec": []
+}

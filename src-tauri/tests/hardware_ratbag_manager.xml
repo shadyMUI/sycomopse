@@ -1,0 +1,6 @@
+<node name="/org/freedesktop/ratbag1">
+  <interface name="org.freedesktop.ratbag1.Manager">
+    <property name="APIVersion" type="i" access="read"/>
+    <property name="Devices" type="ao" access="read"/>
+  </interface>
+</node>

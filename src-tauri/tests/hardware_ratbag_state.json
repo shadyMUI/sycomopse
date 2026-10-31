@@ -1,0 +1,16 @@
+{
+  "model": "usb:046d:4074:1",
+  "api_version": 2,
+  "profiles": [
+    {"path":"/org/freedesktop/ratbag1/profile/hidraw7/p0","is_active":false,"is_dirty":false,"disabled":false},
+    {"path":"/org/freedesktop/ratbag1/profile/hidraw7/p3","is_active":true,"is_dirty":false,"disabled":false}
+  ],
+  "resolutions": [
+    {"path":"/org/freedesktop/ratbag1/resolution/hidraw7/p3/r0","is_active":false,"disabled":false},
+    {"path":"/org/freedesktop/ratbag1/resolution/hidraw7/p3/r2","is_active":true,"disabled":false}
+  ],
+  "dpi_values": [400,800,1200,3200],
+  "report_rates": [125,250,500,1000],
+  "scalar": {"property_signature":"v","inner_signature":"u","values":[800]},
+  "xy": {"property_signature":"v","inner_signature":"(uu)","values":[800,1200]}
+}

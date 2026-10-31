@@ -1,0 +1,12 @@
+<node name="/org/freedesktop/ratbag1/resolution/hidraw7/p3/r2">
+  <interface name="org.freedesktop.ratbag1.Resolution">
+    <property name="IsActive" type="b" access="read"/>
+    <property name="IsDisabled" type="b" access="readwrite"/>
+    <property name="Capabilities" type="au" access="read"/>
+    <property name="Resolution" type="v" access="readwrite">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+    <property name="Resolutions" type="au" access="read"/>
+    <method name="SetActive"><arg type="u" direction="out"/></method>
+  </interface>
+</node>

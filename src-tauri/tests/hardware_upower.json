@@ -1,0 +1,10 @@
+[
+  {"percentage":64.2,"battery_level":1,"state":2,"update_time":990},
+  {"percentage":55.0,"battery_level":6,"state":2,"update_time":980},
+  {"percentage":100.0,"battery_level":8,"state":4,"update_time":600},
+  {"percentage":0.0,"battery_level":0,"state":0,"update_time":0},
+  {"percentage":-1.0,"battery_level":1,"state":0,"update_time":995},
+  {"percentage":101.0,"battery_level":1,"state":1,"update_time":2000},
+  {"percentage":null,"battery_level":4,"state":null,"update_time":null},
+  {"percentage":0.0,"battery_level":1,"state":3,"update_time":1000}
+]
