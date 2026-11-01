@@ -1,0 +1,8 @@
+.cache/
+.stage*/
+__pycache__/
+*.pyc
+rootfs/usr/lib/peripheral-hub/remapper/vendor/
+rootfs/usr/share/doc/peripheral-hub/remapper/input-remapper-*-source.tar.gz
+rootfs/usr/share/doc/peripheral-hub/remapper/LICENSE.input-remapper
+rootfs/usr/share/doc/peripheral-hub/remapper/source-lock.json

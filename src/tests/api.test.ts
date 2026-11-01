@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDemoApi, createHubApi, createTauriApi, isDpiValueAllowed } from "../api";
-import type { AudioProfile, Snapshot } from "../types";
+import { createDemoApi, createHubApi, createTauriApi, isDpiValueAllowed, parseDpiDraft } from "../api";
+import { remappingProblem } from "../remapping";
+import type { AudioProfile, MouseBinding, Snapshot } from "../types";
 
 const ipc = vi.hoisted(() => ({ invoke: vi.fn(), isTauri: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: ipc.invoke, isTauri: ipc.isTauri }));
@@ -26,6 +27,9 @@ describe("contratti IPC Tauri", () => {
     await api.refreshDevices();
     await api.setDpi("mouse-1", 800, 1600);
     await api.setPollingRate("mouse-1", 250);
+    const bindings: MouseBinding[] = [{ buttonId: "button-275", action: { kind: "chord", modifiers: [29], key: 30 } }];
+    await api.applyMouseRemapping("mouse-1", bindings, true, false);
+    await api.disableMouseRemapping("mouse-1");
     await api.setDefaultOutput("alsa_output.test");
     await api.setVolume("alsa_input.test", 0.42);
     await api.setMute("alsa_input.test", true);
@@ -37,7 +41,9 @@ describe("contratti IPC Tauri", () => {
     await api.exitApp();
     expect(ipc.invoke.mock.calls).toEqual([
       ["get_snapshot"], ["refresh_devices"], ["set_dpi", { deviceId: "mouse-1", x: 800, y: 1600 }],
-      ["set_polling_rate", { deviceId: "mouse-1", rate: 250 }], ["set_default_output", { nodeName: "alsa_output.test" }],
+      ["set_polling_rate", { deviceId: "mouse-1", rate: 250 }],
+      ["apply_mouse_remapping", { deviceId: "mouse-1", bindings, autoApply: true, allowWeakIdentity: false }],
+      ["disable_mouse_remapping", { deviceId: "mouse-1" }], ["set_default_output", { nodeName: "alsa_output.test" }],
       ["set_volume", { nodeName: "alsa_input.test", volume: 0.42 }], ["set_mute", { nodeName: "alsa_input.test", muted: true }],
       ["set_surround", { enabled: true }], ["import_hrtf"], ["save_audio_profile", { profile }],
       ["apply_audio_profile", { profileId: profile.id }], ["exit_app"],
@@ -64,6 +70,8 @@ describe("contratti IPC Tauri", () => {
     expect(snapshot).toMatchObject({ platform: "unsupportedPlatform", demo: false, devices: [], audio: { available: false } });
     expect(snapshot.diagnostics[0].message).toContain("backend Tauri");
     await expect(api.setDpi("mouse", 800, 800)).rejects.toMatchObject({ code: "unsupportedPlatform" });
+    await expect(api.applyMouseRemapping("mouse", [], false, false)).rejects.toMatchObject({ code: "unsupportedPlatform" });
+    await expect(api.disableMouseRemapping("mouse")).rejects.toMatchObject({ code: "unsupportedPlatform" });
     await api.subscribe(() => {});
     expect(ipc.invoke).not.toHaveBeenCalled();
     expect(ipc.listen).not.toHaveBeenCalled();
@@ -164,6 +172,91 @@ describe("adapter demo esplicito", () => {
     expect(isDpiValueAllowed({ kind: "range", min: 100, max: 30000, step: 100 }, 30000)).toBe(true);
     expect(isDpiValueAllowed({ kind: "range", min: 100, max: 30000, step: 100 }, 30001)).toBe(false);
     expect(isDpiValueAllowed({ kind: "unknown" }, 800)).toBe(false);
+  });
+
+  it.each(["", " ", "abc", "0", "-800", "800.5", "1e3", "800 DPI", "9007199254740993"])("non converte la bozza DPI invalida %j in un numero applicabile", (draft) => {
+    expect(parseDpiDraft(draft)).toBeNull();
+  });
+
+  it("interpreta interi DPI senza arrotondare o normalizzare la bozza", () => {
+    expect(parseDpiDraft("1200")).toBe(1200);
+    expect(parseDpiDraft("00800")).toBe(800);
+    expect(isDpiValueAllowed({ kind: "range", min: 100, max: 30000, step: 100 }, parseDpiDraft("850"))).toBe(false);
+  });
+
+  it("applica e ripristina la rimappatura solo nella demo isolata, conservando la preferenza nel readback", async () => {
+    const api = createDemoApi(1);
+    const initial = await api.getSnapshot();
+    const device = initial.devices[0];
+    const bindings: MouseBinding[] = [
+      { buttonId: "button-275", action: { kind: "chord", modifiers: [29, 42], key: 30 } },
+      { buttonId: "button-276", action: { kind: "key", code: 164 } },
+    ];
+    const events: Snapshot[] = [];
+    const stop = await api.subscribe((snapshot) => events.push(snapshot));
+    const result = await api.applyMouseRemapping(device.id, bindings, true, false);
+    expect(result.devices[0].values.remapping).toMatchObject({ state: "active", enabled: true, autoApply: true, pausedForSafety: false, bindings });
+    expect(result.devices[0].values.remapping?.activePreset).not.toBeNull();
+    bindings[0].action = { kind: "disabled" };
+    result.devices[0].values.remapping!.bindings = [];
+    expect((await api.getSnapshot()).devices[0].values.remapping?.bindings[0].action).toEqual({ kind: "chord", modifiers: [29, 42], key: 30 });
+    expect((await createDemoApi(1).getSnapshot()).devices[0].values.remapping).toMatchObject({ state: "inactive", enabled: false, autoApply: false });
+    const restored = await api.disableMouseRemapping(device.id);
+    expect(restored.devices[0].values.remapping).toMatchObject({ state: "inactive", enabled: false, autoApply: false, activePreset: null });
+    expect(events).toHaveLength(2);
+    expect(events[0].devices[0].values.remapping?.enabled).toBe(true);
+    expect(ipc.invoke).not.toHaveBeenCalled();
+    expect(ipc.listen).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("rifiuta sorgenti sconosciute, target non consentiti, chord invalidi e perdita del clic sinistro", async () => {
+    const api = createDemoApi(1);
+    const initial = await api.getSnapshot();
+    const invalid: MouseBinding[][] = [
+      [{ buttonId: "not-detected", action: { kind: "key", code: 30 } }],
+      [{ buttonId: "button-275", action: { kind: "key", code: 9999 } }],
+      [{ buttonId: "button-275", action: { kind: "key", code: 272 } }],
+      [{ buttonId: "button-275", action: { kind: "mouseButton", code: 30 } }],
+      [{ buttonId: "button-275", action: { kind: "chord", modifiers: [], key: 30 } }],
+      [{ buttonId: "button-275", action: { kind: "chord", modifiers: [30], key: 31 } }],
+      [{ buttonId: "button-275", action: { kind: "chord", modifiers: [29, 29], key: 30 } }],
+      [{ buttonId: "button-275", action: { kind: "chord", modifiers: [29], key: 42 } }],
+      [{ buttonId: "button-272", action: { kind: "disabled" } }],
+      [{ buttonId: "button-275", action: { kind: "disabled" } }, { buttonId: "button-275", action: { kind: "default" } }],
+      [{ buttonId: "button-275", action: { kind: "macro", expression: "arbitrary DSL" } } as unknown as MouseBinding],
+    ];
+    for (const bindings of invalid) await expect(api.applyMouseRemapping(initial.devices[0].id, bindings, false, false)).rejects.toMatchObject({ code: "demoValidation" });
+    expect((await api.getSnapshot()).revision).toBe(initial.revision);
+    const result = await api.applyMouseRemapping(initial.devices[0].id, [
+      { buttonId: "button-272", action: { kind: "disabled" } },
+      { buttonId: "button-275", action: { kind: "mouseButton", code: 272 } },
+    ], false, false);
+    expect(result.devices[0].values.remapping?.enabled).toBe(true);
+  });
+
+  it("non acquisisce il mouse per default/passthrough e non inventa target dalle capabilities", async () => {
+    const api = createDemoApi(1);
+    const initial = await api.getSnapshot();
+    const device = initial.devices[0];
+    const result = await api.applyMouseRemapping(device.id, [{ buttonId: "button-272", action: { kind: "default" } }], false, false);
+    expect(result.devices[0].values.remapping).toMatchObject({ state: "inactive", enabled: false, activePreset: null });
+    const capability = device.capabilities.remapping!;
+    expect(remappingProblem({ ...capability, keyCodes: [29, 30] }, [{ buttonId: "button-275", action: { kind: "mouseButton", code: 272 } }], false, false)).toContain("target consentiti");
+  });
+
+  it("valida identita debole e consenso indipendentemente da DPI o polling scrivibili", async () => {
+    const device = (await createDemoApi(1).getSnapshot()).devices[0];
+    device.capabilities.dpi = null;
+    device.capabilities.polling = null;
+    const capability = { ...device.capabilities.remapping!, identityStrength: "port" as const };
+    const bindings: MouseBinding[] = [{ buttonId: "button-275", action: { kind: "key", code: 30 } }];
+    expect(remappingProblem(capability, bindings, true, false)).toContain("consenso esplicito");
+    expect(remappingProblem(capability, bindings, true, true)).toBeNull();
+    expect(remappingProblem(capability, bindings, false, false)).toBeNull();
+    expect(remappingProblem({ ...capability, fingerprint: null }, bindings, true, true)).toContain("non verificata");
+    expect(remappingProblem({ ...capability, writable: false }, bindings, false, false)).not.toBeNull();
+    expect(remappingProblem({ ...capability, availability: "unsupportedPlatform" }, bindings, false, false)).not.toBeNull();
   });
 
   it("importare una HRTF disattiva il filtro e non riattiva effetti o cambia il volume fisico", async () => {

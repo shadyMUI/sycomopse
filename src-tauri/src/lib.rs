@@ -6,6 +6,7 @@ pub mod models;
 pub mod process;
 pub mod profiles;
 pub mod providers;
+pub mod remapping;
 pub mod surround;
 
 #[cfg(feature = "desktop")]
@@ -53,6 +54,8 @@ pub(crate) struct AppState {
     audio: Mutex<audio::AudioController>,
     #[cfg(target_os = "linux")]
     profiles: Mutex<profiles::ProfileStore>,
+    #[cfg(target_os = "linux")]
+    remapping: remapping::Controller,
 }
 
 #[cfg(feature = "desktop")]
@@ -62,6 +65,8 @@ impl AppState {
         let profiles = profiles::ProfileStore::new()?;
         #[cfg(target_os = "linux")]
         let audio = audio::AudioController::new(profiles.paths().clone());
+        #[cfg(target_os = "linux")]
+        let remapping = remapping::Controller::new(profiles.paths().clone());
         Ok(Self {
             snapshot: RwLock::new(Snapshot::default()),
             tasks: StdMutex::new(Vec::new()),
@@ -75,6 +80,8 @@ impl AppState {
             audio: Mutex::new(audio),
             #[cfg(target_os = "linux")]
             profiles: Mutex::new(profiles),
+            #[cfg(target_os = "linux")]
+            remapping,
         })
     }
 
@@ -168,6 +175,14 @@ impl AppState {
             .cloned()
             .collect();
         let mut discovery = devices::discover(&nodes, include_batteries).await;
+        discovery.devices.extend(
+            previous
+                .devices
+                .iter()
+                .filter(|device| device.provider == ProviderKind::Inputremapper)
+                .cloned(),
+        );
+        self.remapping.decorate(&mut discovery).await;
         for device in &mut discovery.devices {
             if device.values.staged {
                 let old = previous
@@ -220,6 +235,82 @@ impl AppState {
         let _guard = self.hardware.lock().await;
         self.refresh_hardware_locked(app, include_batteries, None)
             .await
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn refresh_remapping_locked(&self, app: &AppHandle) -> Snapshot {
+        let previous = self.snapshot.read().await.clone();
+        let mut discovery = Discovery {
+            devices: previous.devices,
+            diagnostics: Vec::new(),
+        };
+        self.remapping.decorate(&mut discovery).await;
+        self.publish(app, |snapshot| {
+            snapshot.devices = discovery.devices;
+            snapshot
+                .diagnostics
+                .retain(|item| item.provider != ProviderKind::Inputremapper);
+            snapshot.diagnostics.extend(discovery.diagnostics);
+        })
+        .await
+    }
+
+    pub(crate) async fn mutate_remapping(
+        &self,
+        app: &AppHandle,
+        device_id: &str,
+        bindings: Option<Vec<MouseBinding>>,
+        auto_apply: bool,
+        allow_weak_identity: bool,
+    ) -> AppResult<Snapshot> {
+        self.require_platform()?;
+        #[cfg(target_os = "linux")]
+        {
+            let _guard = self.hardware.lock().await;
+            let device = self
+                .snapshot
+                .read()
+                .await
+                .devices
+                .iter()
+                .find(|device| device.id == device_id)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::DeviceNotFound,
+                        "Mouse non presente nella snapshot.",
+                    )
+                })?;
+            let result = match bindings {
+                Some(bindings) => {
+                    self.remapping
+                        .apply(&device, bindings, auto_apply, allow_weak_identity)
+                        .await
+                }
+                None => self.remapping.disable(&device).await,
+            };
+            let snapshot = self.refresh_remapping_locked(app).await;
+            if let Err(error) = result {
+                self.publish(app, |snapshot| {
+                    snapshot
+                        .diagnostics
+                        .retain(|item| item.id != "remapping-command");
+                    snapshot.diagnostics.push(diagnostic_from_error(
+                        "remapping-command",
+                        ProviderKind::Inputremapper,
+                        &error,
+                    ));
+                })
+                .await;
+                return Err(error);
+            }
+            Ok(snapshot)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, device_id, bindings, auto_apply, allow_weak_identity);
+            Err(AppError::unsupported_platform())
+        }
     }
 
     pub(crate) async fn refresh_all(&self, app: &AppHandle) -> AppResult<Snapshot> {
@@ -684,6 +775,19 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
             }
         }
     }));
+    let remapping_app = app.clone();
+    let remapping_state = state.clone();
+    state.track(tauri::async_runtime::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let _guard = remapping_state.hardware.lock().await;
+            remapping_state
+                .refresh_remapping_locked(&remapping_app)
+                .await;
+        }
+    }));
     let signal_app = app.clone();
     tauri::async_runtime::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
@@ -708,6 +812,7 @@ pub fn run() {
             commands::set_polling_rate, commands::set_default_output, commands::set_volume,
             commands::set_mute, commands::set_surround, commands::import_hrtf,
             commands::save_audio_profile, commands::apply_audio_profile, commands::exit_app,
+            commands::apply_mouse_remapping, commands::disable_mouse_remapping,
         ])
         .on_menu_event(menu_event)
         .setup(|app| {

@@ -1,10 +1,24 @@
-export type ProviderKind = "openrazer" | "ratbag" | "upower" | "headsetcontrol" | "pipewire" | "usb" | "app";
+export type ProviderKind = "openrazer" | "ratbag" | "upower" | "headsetcontrol" | "pipewire" | "inputremapper" | "usb" | "app";
 export type AvailabilityCode = "available" | "absent" | "unsupported" | "providerMissing" | "permissionDenied" | "unknown" | "unsupportedPlatform";
 export type Brand = "razer" | "logitech" | "generic";
 export type DeviceKind = "mouse" | "headset" | "receiver" | "unknown";
 export type DpiValues = { kind: "range"; min: number; max: number; step: number } | { kind: "discrete"; values: number[] } | { kind: "unknown" };
 export interface DpiCapability { values: DpiValues; writable: boolean; separateAxes: boolean; reason: string | null }
 export interface PollingCapability { values: number[]; writable: boolean; reason: string | null }
+export interface RemappingCapability {
+  provider: ProviderKind; availability: AvailabilityCode; writable: boolean;
+  fingerprint: string | null; identityStrength: "serial" | "port" | null;
+  buttons: { id: string; label: string; code: number }[];
+  keyCodes: number[]; reason: string | null;
+}
+export type MouseAction = { kind: "default" } | { kind: "mouseButton"; code: number }
+  | { kind: "key"; code: number } | { kind: "chord"; modifiers: number[]; key: number } | { kind: "disabled" };
+export interface MouseBinding { buttonId: string; action: MouseAction }
+export interface RemappingValues {
+  state: "unavailable" | "inactive" | "starting" | "active" | "busy" | "error" | "paused";
+  enabled: boolean; autoApply: boolean; pausedForSafety: boolean; profileId: string | null;
+  bindings: MouseBinding[]; activePreset: string | null; message: string | null;
+}
 export interface Battery {
   percentage: number | null;
   level: "unknown" | "critical" | "low" | "normal" | "high" | "full" | null;
@@ -24,8 +38,8 @@ export interface Device {
   id: string; name: string; brand: Brand; kind: DeviceKind; provider: ProviderKind;
   identity: DeviceIdentity; availability: AvailabilityCode;
   support: "supported" | "partial" | "unsupported";
-  capabilities: { dpi: DpiCapability | null; polling: PollingCapability | null };
-  values: { dpi: { x: number; y: number } | null; pollingRate: number | null; battery: Battery | null };
+  capabilities: { dpi: DpiCapability | null; polling: PollingCapability | null; remapping: RemappingCapability | null };
+  values: { dpi: { x: number; y: number } | null; pollingRate: number | null; battery: Battery | null; remapping: RemappingValues | null };
   outputNodeNames: string[]; limitations: string[];
 }
 export interface AudioNode {
@@ -61,6 +75,8 @@ export interface HubApi {
   refreshDevices(): Promise<Snapshot>;
   setDpi(deviceId: string, x: number, y: number): Promise<Snapshot>;
   setPollingRate(deviceId: string, rate: number): Promise<Snapshot>;
+  applyMouseRemapping(deviceId: string, bindings: MouseBinding[], autoApply: boolean, allowWeakIdentity: boolean): Promise<Snapshot>;
+  disableMouseRemapping(deviceId: string): Promise<Snapshot>;
   setDefaultOutput(nodeName: string): Promise<Snapshot>;
   setVolume(nodeName: string, volume: number): Promise<Snapshot>;
   setMute(nodeName: string, muted: boolean): Promise<Snapshot>;

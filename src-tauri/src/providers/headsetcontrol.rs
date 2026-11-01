@@ -155,6 +155,56 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
     Ok(report)
 }
 
+#[cfg(target_os = "linux")]
+async fn probe() -> AppResult<crate::process::ProcessOutput> {
+    use std::os::unix::fs::MetadataExt;
+    use std::time::Duration;
+    let system = crate::process::run(
+        "headsetcontrol",
+        &["-b", "-o", "json"],
+        Duration::from_secs(5),
+    )
+    .await;
+    let conforms = |output: &crate::process::ProcessOutput| {
+        output.stderr.trim().is_empty()
+            && parse_json(&output.stdout, 0).is_ok_and(|report| {
+                matches!(report.api_version.as_deref(), Some("1.8" | "1.9"))
+                    && !report
+                        .diagnostics
+                        .iter()
+                        .any(|item| item.id == "headsetcontrol-api")
+            })
+    };
+    if system.as_ref().is_ok_and(conforms) {
+        return system;
+    }
+    let path = crate::process::PRIVATE_HEADSETCONTROL;
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => system,
+        Err(error) => Err(error.into()),
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != 0
+                || metadata.mode() & 0o022 != 0
+                || metadata.mode() & 0o111 == 0
+            {
+                return Err(crate::models::AppError::new(
+                    crate::models::ErrorCode::PermissionDenied,
+                    "CLI HeadsetControl privato non installato con permessi sicuri.",
+                ));
+            }
+            let private =
+                crate::process::run(path, &["-b", "-o", "json"], Duration::from_secs(5)).await;
+            if private.as_ref().is_ok_and(conforms) || system.is_err() {
+                private
+            } else {
+                system
+            }
+        }
+    }
+}
+
 pub fn usb_fingerprint(usb: &[crate::devices::UsbMetadata]) -> String {
     let mut usb: Vec<_> = usb
         .iter()
@@ -200,13 +250,7 @@ pub(crate) async fn discover(usb: &[crate::devices::UsbMetadata]) -> Report {
             return report.clone();
         }
     }
-    let mut report = match crate::process::run(
-        "headsetcontrol",
-        &["-b", "-o", "json"],
-        Duration::from_secs(5),
-    )
-    .await
-    {
+    let mut report = match probe().await {
         Ok(output) => {
             match parse_json(&output.stdout, now_secs()) {
                 Ok(mut report) => {

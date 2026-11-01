@@ -1,0 +1,30 @@
+Peripheral Hub private Input Remapper backend
+
+The bridge, private engine extension, fetch/staging code, unit, policy and tests
+in packaging/remapper are Copyright (C) 2026 Peripheral Hub contributors and
+licensed under GNU GPL version 3 or, at your option, any later version.
+They are a separate privileged process, not a relicensing of the MIT GUI/core.
+
+Input Remapper 2.2.1
+Copyright (C) sezanzeb and upstream contributors (individual source notices apply)
+https://github.com/sezanzeb/input-remapper
+Frozen commit: e9a87d13480c3b1dee654b296578a8f4e2cd31d6
+License: GNU GPL version 3 or, at your option, any later version.
+
+The verified upstream license is installed here as LICENSE.input-remapper.
+The full, unchanged upstream source archive is installed here as
+input-remapper-2.2.1-source.tar.gz, with source-lock.json and archive SHA256.
+The installed private Python files are the corresponding bridge/extension source.
+The native build must also distribute fetch-engine.py --source-archive output,
+which includes the upstream archive, complete source tree, bridge, build/staging
+code, unit, policy, lock and tests, with a reproducible SHA256.
+
+The upstream module files are unmodified. Runtime-only private extensions disable
+stock configuration/daemon entry points and event logging, seed only kernel key
+constants, restrict the DSL to trusted generated hold_keys chords and replace
+Injector discovery/grab/cleanup. No stock bus, udev autoload, presets or services
+are installed, modified, stopped or consulted by the private backend.
+
+This software is provided WITHOUT ANY WARRANTY, including without the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the full
+GNU General Public License in LICENSE.input-remapper and the source archive.

@@ -711,6 +711,7 @@ mod linux {
                 writable: polling_writable,
                 reason: polling_reason,
             }),
+            remapping: None,
         };
         state.device.values.staged = state
             .profiles

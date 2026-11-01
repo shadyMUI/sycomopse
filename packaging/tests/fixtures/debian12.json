@@ -1,0 +1,9 @@
+{
+  "os_release": "ID=debian\nVERSION_ID=\"12\"\nVERSION_CODENAME=bookworm\n",
+  "facts": {
+    "arch": "x86_64", "init": "systemd", "uid": 1000, "immutable": false,
+    "kernel": "6.1.0-40-amd64", "kernel_headers_match": false,
+    "secure_boot": false, "session": true, "groups": ["plugdev"],
+    "pulse_audio": false, "media_session": false, "openrazer_version": "3.5.1-1"
+  }
+}

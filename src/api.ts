@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppError, AudioNode, AudioProfile, Device, DpiValues, HubApi, Snapshot } from "./types";
+import { keyboardCodes, mouseButtonNames, remappingProblem } from "./remapping";
 
 const browserMessage = "Backend non disponibile: i controlli hardware richiedono Peripheral Hub desktop su Linux. Questo browser non dispone del backend Tauri.";
 
@@ -40,6 +41,12 @@ export function isDpiValueAllowed(values: DpiValues, value: number | null): bool
   return false;
 }
 
+export function parseDpiDraft(draft: string): number | null {
+  if (!/^\d+$/.test(draft)) return null;
+  const value = Number(draft);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 export function createTauriApi(): HubApi {
   async function command<T = Snapshot>(name: string, args?: Record<string, unknown>): Promise<T> {
     if (!isTauri()) throw { code: "unsupportedPlatform", message: browserMessage, detail: null } satisfies AppError;
@@ -56,6 +63,8 @@ export function createTauriApi(): HubApi {
     refreshDevices: () => isTauri() ? command("refresh_devices") : Promise.resolve(unsupportedSnapshot()),
     setDpi: (deviceId, x, y) => command("set_dpi", { deviceId, x, y }),
     setPollingRate: (deviceId, rate) => command("set_polling_rate", { deviceId, rate }),
+    applyMouseRemapping: (deviceId, bindings, autoApply, allowWeakIdentity) => command("apply_mouse_remapping", { deviceId, bindings, autoApply, allowWeakIdentity }),
+    disableMouseRemapping: (deviceId) => command("disable_mouse_remapping", { deviceId }),
     setDefaultOutput: (nodeName) => command("set_default_output", { nodeName }),
     setVolume: (nodeName, volume) => command("set_volume", { nodeName, volume }),
     setMute: (nodeName, muted) => command("set_mute", { nodeName, muted }),
@@ -86,6 +95,16 @@ export function createDemoApi(count = 3): HubApi {
     serial: null, physicalPath: null, vendorId: null, productId: null,
     transport: "Simulato", firmware: null, backendPath: null,
   };
+  const remapping = {
+    provider: "inputremapper" as const, availability: "available" as const, writable: true,
+    fingerprint: null, identityStrength: "serial" as const,
+    buttons: [272, 273, 274, 275, 276].map((code) => ({ id: `button-${code}`, label: mouseButtonNames[code], code })),
+    keyCodes: [...new Set([...Object.values(keyboardCodes), ...Object.keys(mouseButtonNames).map(Number)])].sort((a, b) => a - b), reason: null,
+  };
+  const remappingValues = {
+    state: "inactive" as const, enabled: false, autoApply: false, pausedForSafety: false,
+    profileId: null, bindings: [], activePreset: null, message: "Rimappatura simulata: nessun evento input viene acquisito o emesso.",
+  };
   const samples: Device[] = [
     {
       id: "demo-viper", name: "Razer Viper V3 HyperSpeed", brand: "razer", kind: "mouse", provider: "openrazer",
@@ -94,20 +113,22 @@ export function createDemoApi(count = 3): HubApi {
       capabilities: {
         dpi: { values: { kind: "range", min: 100, max: 30000, step: 100 }, writable: true, separateAxes: true, reason: null },
         polling: { values: [125, 500, 1000], writable: true, reason: null },
+        remapping,
       },
       values: {
         dpi: { x: 800, y: 800 }, pollingRate: 1000,
         battery: { percentage: 78, level: null, charging: false, source: "openrazer", observedAt: now, sourceUpdatedAt: now, stale: false },
+        remapping: remappingValues,
       },
       outputNodeNames: [],
-      limitations: ["Batteria AA: nessuna ricarica nel mouse.", "DPI e polling simulati. Remapping, RGB e calibrazione non inclusi."],
+      limitations: ["Batteria AA: nessuna ricarica nel mouse.", "DPI, polling e rimappatura simulati. RGB e calibrazione non inclusi."],
     },
     {
       id: "demo-blackshark", name: "Razer BlackShark V3 X HyperSpeed", brand: "razer", kind: "headset", provider: "usb",
       identity: { ...identity, vendorId: 0x1532, productId: 0x057c, transport: "USB (demo)" },
       availability: "available", support: "partial",
-      capabilities: { dpi: null, polling: null },
-      values: { dpi: null, pollingRate: null, battery: null }, outputNodeNames: [],
+      capabilities: { dpi: null, polling: null, remapping: null },
+      values: { dpi: null, pollingRate: null, battery: null, remapping: null }, outputNodeNames: [],
       limitations: ["Identificazione USB e audio standard PipeWire.", "Batteria e controlli proprietari non esposti da OpenRazer stock."],
     },
     {
@@ -117,8 +138,9 @@ export function createDemoApi(count = 3): HubApi {
       capabilities: {
         dpi: { values: { kind: "discrete", values: [400, 800, 1600, 3200, 6400, 12000] }, writable: true, separateAxes: false, reason: null },
         polling: { values: [125, 250, 500, 1000], writable: true, reason: null },
+        remapping,
       },
-      values: { dpi: { x: 1600, y: 1600 }, pollingRate: 500, battery: null }, outputNodeNames: [],
+      values: { dpi: { x: 1600, y: 1600 }, pollingRate: 500, battery: null, remapping: remappingValues }, outputNodeNames: [],
       limitations: ["Elenco DPI simulato: quello reale dipende dal provider.", "Batteria non presunta da ratbagd. PID logico HID++, non identita USB del ricevitore."],
     },
   ];
@@ -130,6 +152,7 @@ export function createDemoApi(count = 3): HubApi {
     sample.identity.serial = `DEMO-${index + 1}`;
     sample.identity.physicalPath = `demo/device/${index + 1}`;
     sample.identity.backendPath = `demo/${sample.provider}/${index + 1}`;
+    if (sample.capabilities.remapping) sample.capabilities.remapping.fingerprint = `demo-fingerprint-${index + 1}`;
     if (sample.kind === "headset") sample.outputNodeNames = [`alsa_output.usb-demo-blackshark-${instance}.analog-stereo`];
     return sample;
   });
@@ -163,6 +186,7 @@ export function createDemoApi(count = 3): HubApi {
     diagnostics: [
       { id: "demo-openrazer", provider: "openrazer", code: "available", severity: "info", message: "OpenRazer simulato", detail: "Nessuna connessione DBus e nessuna lettura hardware." },
       { id: "demo-ratbag", provider: "ratbag", code: "available", severity: "info", message: "ratbagd simulato", detail: "Liste e readback sintetici, non una verifica del supporto reale." },
+      { id: "demo-inputremapper", provider: "inputremapper", code: "available", severity: "info", message: "Input Remapper simulato", detail: "Nessun grab, recorder globale, agente o evento hardware. Stato isolato in memoria." },
       { id: "demo-pipewire", provider: "pipewire", code: "available", severity: "info", message: "PipeWire simulato", detail: "Nessun flusso audio o filtro HRTF viene creato." },
       { id: "demo-upower", provider: "upower", code: "absent", severity: "info", message: "Nessun dato UPower simulato", detail: null },
       { id: "demo-headsetcontrol", provider: "headsetcontrol", code: "unsupported", severity: "info", message: "Batteria cuffie non esposta", detail: "La cuffia demo e' identificata solo via USB." },
@@ -238,6 +262,32 @@ export function createDemoApi(count = 3): HubApi {
         const device = mouse(next, deviceId);
         if (!device.capabilities.polling?.writable || !device.capabilities.polling.values.includes(rate)) demoError("Polling non supportato da questo mouse.");
         device.values.pollingRate = rate;
+      });
+    },
+    async applyMouseRemapping(deviceId, bindings, autoApply, allowWeakIdentity) {
+      return commit((next) => {
+        const device = next.devices.find((entry) => entry.id === deviceId && entry.kind === "mouse");
+        if (!device) demoError("Mouse non disponibile.");
+        if (typeof autoApply !== "boolean" || typeof allowWeakIdentity !== "boolean") demoError("Preferenze di rimappatura non valide.");
+        const problem = remappingProblem(device.capabilities.remapping, bindings, autoApply, allowWeakIdentity);
+        if (problem) demoError(problem);
+        const profileId = device.values.remapping?.profileId ?? `demo-profile-${device.id}`;
+        const enabled = bindings.some((binding) => binding.action.kind !== "default");
+        device.values.remapping = {
+          state: enabled ? "active" : "inactive", enabled, autoApply: enabled && autoApply, pausedForSafety: false,
+          profileId, bindings: clone(bindings), activePreset: enabled ? `${profileId}-${next.revision + 1}` : null,
+          message: "Rimappatura simulata: nessun evento input viene acquisito o emesso.",
+        };
+      });
+    },
+    async disableMouseRemapping(deviceId) {
+      return commit((next) => {
+        const device = next.devices.find((entry) => entry.id === deviceId && entry.kind === "mouse");
+        if (!device?.values.remapping) demoError("Configurazione di rimappatura demo non disponibile.");
+        device.values.remapping = {
+          ...device.values.remapping, state: "inactive", enabled: false, autoApply: false,
+          pausedForSafety: false, activePreset: null, message: "Pulsanti originali ripristinati nella demo; nessun comando hardware.",
+        };
       });
     },
     async setDefaultOutput(nodeName) {

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Restore mouse mappings
+Name[it]=Ripristina mouse
+Comment=Disable only Peripheral Hub mouse mappings
+Exec=/usr/bin/peripheral-hub-remapping-agent --disable-all
+TryExec=/usr/bin/peripheral-hub-remapping-agent
+Icon=peripheral-hub
+Terminal=true
+Categories=Settings;HardwareSettings;
+Keywords=mouse;remapping;recovery;

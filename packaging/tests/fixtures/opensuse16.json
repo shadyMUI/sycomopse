@@ -1,0 +1,9 @@
+{
+  "os_release": "ID=opensuse-leap\nVERSION_ID=16.0\n",
+  "facts": {
+    "arch": "x86_64", "init": "systemd", "uid": 1000, "immutable": false,
+    "kernel": "6.12.0-160000.9-default", "kernel_flavor": "default", "kernel_package_version": "6.12.0-160000.9.1",
+    "kernel_headers_match": false, "secure_boot": false, "session": true,
+    "groups": ["users"], "pulse_audio": false, "media_session": false, "openrazer_version": ""
+  }
+}

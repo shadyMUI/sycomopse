@@ -1,0 +1,19 @@
+[Unit]
+Description=Peripheral Hub mouse remapping agent
+After=dbus.socket
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/peripheral-hub-remapping-agent
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

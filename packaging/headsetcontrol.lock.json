@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "version": "4.2.0",
+  "commit": "91ee690a5e302a10a6f4f75a46be05846a38a3b0",
+  "accepted_api_versions": ["1.8", "1.9"],
+  "candidate_only": true,
+  "license": "GPL-3.0-or-later",
+  "source": {
+    "url": "https://github.com/Sapd/HeadsetControl/releases/download/4.2.0/headsetcontrol-4.2.0.tar.gz",
+    "sha256": "bab9046b33d487730d5d46537811be4036f107e4c44ba3a47293426a038e7da7"
+  },
+  "linux_x86_64": {
+    "url": "https://github.com/Sapd/HeadsetControl/releases/download/4.2.0/headsetcontrol-linux-x86_64.zip",
+    "sha256": "a263f853b34b54e8ef90075d619720738f278e07cd37356a792b6843594b8c1b"
+  },
+  "signature_url": "https://github.com/Sapd/HeadsetControl/releases/download/4.2.0/headsetcontrol-4.2.0.tar.gz.asc",
+  "upstream_signing_fingerprint": "893E9C96C0E1A0CE52CF88FD12C8E71EC92CF077"
+}

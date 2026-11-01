@@ -1,0 +1,9 @@
+{
+  "os_release": "ID=fedora\nVERSION_ID=44\n",
+  "facts": {
+    "arch": "x86_64", "init": "systemd", "uid": 1000, "immutable": false,
+    "kernel": "6.18.2-200.fc44.x86_64", "kernel_headers_match": false,
+    "secure_boot": false, "session": true, "groups": ["users"],
+    "pulse_audio": false, "media_session": false, "openrazer_version": ""
+  }
+}

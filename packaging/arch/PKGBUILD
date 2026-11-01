@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Build-only recipe. End users receive this native package, not an AUR task.
+pkgname=peripheral-hub
+pkgver=${PH_VERSION:?Use packaging/build.py to stage and audit the actual payload}
+pkgrel=1
+pkgdesc='Peripheral Hub GUI, user agent and private Input Remapper engine'
+arch=('x86_64')
+url='https://github.com/shadyMUI/sycomopse'
+license=('MIT' 'GPL-3.0-or-later' 'BSD-3-Clause')
+install=peripheral-hub.install
+source=('rootfs.tar.gz' 'native-depends')
+sha256sums=("${PH_ROOTFS_SHA256:?}" "${PH_DEPENDS_SHA256:?}")
+options=('!strip' '!debug')
+mapfile -t depends < "$startdir/native-depends"
+
+package() {
+    cp -a "$srcdir/usr" "$pkgdir/usr"
+}

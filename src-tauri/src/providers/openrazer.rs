@@ -515,6 +515,7 @@ mod linux {
         let mut capabilities = DeviceCapabilities {
             dpi: dpi_capability(&api, product, maximum, discrete, current_dpi),
             polling: polling_capability(&api, product, supported_rates, current_rate),
+            remapping: None,
         };
         let ambiguous_usb = usb_identities
             .iter()
@@ -560,6 +561,7 @@ mod linux {
                     dpi: current_dpi,
                     polling_rate: current_rate,
                     battery: battery_value,
+                    remapping: None,
                     staged: false,
                 },
                 output_node_names: Vec::new(),

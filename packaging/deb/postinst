@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi
+# Service activation belongs to the explicitly authorized installer, not dpkg.
+exit 0

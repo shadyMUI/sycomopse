@@ -1,4 +1,4 @@
-use crate::models::{AppError, AppResult, AudioProfile, ErrorCode, Snapshot};
+use crate::models::{AppError, AppResult, AudioProfile, ErrorCode, MouseBinding, Snapshot};
 use crate::{request_exit, AppState, AudioMutation};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -36,6 +36,37 @@ pub async fn set_polling_rate(
     rate: u32,
 ) -> AppResult<Snapshot> {
     state.set_polling_rate(&app, &device_id, rate).await
+}
+
+#[tauri::command]
+pub async fn apply_mouse_remapping(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    device_id: String,
+    bindings: Vec<MouseBinding>,
+    auto_apply: bool,
+    allow_weak_identity: bool,
+) -> AppResult<Snapshot> {
+    state
+        .mutate_remapping(
+            &app,
+            &device_id,
+            Some(bindings),
+            auto_apply,
+            allow_weak_identity,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn disable_mouse_remapping(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    device_id: String,
+) -> AppResult<Snapshot> {
+    state
+        .mutate_remapping(&app, &device_id, None, false, false)
+        .await
 }
 
 #[tauri::command]

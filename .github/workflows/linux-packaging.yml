@@ -1,0 +1,65 @@
+name: Linux Native Packaging
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'src-tauri/**'
+      - 'src/**'
+      - 'package*.json'
+      - '.github/workflows/linux-packaging.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  installer-fixtures:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Python fixture and integrity tests (no installation)
+        run: python -m unittest discover -s packaging/tests -v
+
+  native-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - arch
+          - cachyos
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04
+          - debian-12
+          - debian-13
+          - fedora-44
+          - opensuse-leap-16.0
+          - opensuse-tumbleweed
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Installer fixtures
+        run: python3 -m unittest discover -s packaging/tests -v
+      - name: Shell syntax
+        run: |
+          bash -n packaging/install.sh
+          bash -n packaging/ci/bootstrap.sh
+          bash -n packaging/arch/PKGBUILD
+          bash -n packaging/arch/peripheral-hub.install
+          for file in packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm; do bash -n "$file" || exit 1; done
+      - name: Native build, ELF/import audit and isolated systemd smoke
+        run: python3 packaging/ci/matrix.py --target '${{ matrix.target }}' --output packaging/out
+      - name: Upload packages, installer, manifest and corresponding sources
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: peripheral-hub-0.1.0-${{ matrix.target }}-x86_64
+          path: packaging/out/peripheral-hub-0.1.0-${{ matrix.target }}-x86_64/
+          if-no-files-found: error
+          retention-days: 14

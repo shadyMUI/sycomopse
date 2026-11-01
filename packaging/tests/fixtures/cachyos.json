@@ -1,0 +1,10 @@
+{
+  "os_release": "ID=cachyos\nNAME=CachyOS\nID_LIKE=arch\n",
+  "facts": {
+    "arch": "x86_64", "init": "systemd", "uid": 1000, "immutable": false,
+    "kernel": "6.18.2-2-cachyos", "kernel_pkgbase": "linux-cachyos", "kernel_package_version": "6.18.2-2",
+    "kernel_headers_match": false, "secure_boot": false, "session": true,
+    "groups": ["users"], "pulse_audio": false, "media_session": false,
+    "openrazer_version": "3.12.4-1", "headsetcontrol": {"configured": false, "reason": "Fixture: API 1.6 is not accepted by Rust"}
+  }
+}

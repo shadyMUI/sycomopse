@@ -1,350 +1,119 @@
-# OpenRazer e Close-to-Tray
+# Controlli Mouse e Installer Linux Completi
 
-Stato: pronto per implementazione. Le due scelte sulla tray sono state confermate dall'utente.
+Stato: pronto per implementazione. Nuovo intervento sopra il baseline `22fa21e`; OpenRazer autostart e close-to-tray sono gia implementati e non vanno rifatti.
 
-## Obiettivo
+## Obiettivo e Decisioni
 
-Avviare OpenRazer prima dell'ispezione DBus e mantenere Peripheral Hub attivo quando viene chiusa la finestra principale, senza interrompere audio PipeWire, DSP surround, monitor hardware o configurazione DPI/report rate.
+- Campo DPI manuale sempre visibile, sincronizzato con i controlli esistenti e validato contro le capabilities reali.
+- Rimappatura software dei pulsanti mouse rilevati: clic, tasto, multimedia e scorciatoie. Sequenze temporizzate, ripetizioni, comandi shell, rimappatura di tastiere autonome ed editor di profili multipli sono fuori scope.
+- L'utente ha scelto rimappature attive anche dopo Esci e riattivazione automatica dopo login/riavvio/hotplug. Serve quindi un agente per utente distinto dalla GUI.
+- Installazione completa per Arch/CachyOS, Ubuntu, Debian, Fedora e openSUSE con systemd. NixOS, Alpine, Void, distro immutabili, altri init system e ARM sono fuori scope in questa versione.
+- Primi artefatti x86_64: Arch/CachyOS rolling, Ubuntu LTS con Python >=3.10 e WebKitGTK 4.1, Debian 12/13, Fedora stabile mantenuta, openSUSE Leap >=16 e Tumbleweed. Congelare VERSION_ID e immagini effettivamente testate nel manifest di build; non dichiarare supportate versioni non verificate o EOL.
+- Installer online: backend specifici inclusi nel pacchetto dell'app; librerie native, driver e kernel headers risolti automaticamente dai gestori della distro. Offline completo per kernel arbitrari non richiesto e fuori scope.
+- Autorizzazione amministrativa solo nell'installazione/riparazione esplicitamente avviata. GUI e agente restano non-root; nessuna elevazione automatica al primo avvio dell'app.
+- Preservare audio, DPI/polling, single-instance, demo isolata, permessi IPC minimi e modifiche baseline estranee, incluse quelle HeadsetControl. Non inventare supporto hardware o correggere quei filtri in questo task.
 
-## Evidenze
+## Fatti da Rispettare
 
-- `src-tauri/Cargo.toml:28,33`: `tray-icon`, Tokio `process` e `time` sono gia abilitati; Tauri risolto nel lockfile: 2.12.5.
-- `src-tauri/src/providers/openrazer.rs:179-193`: `manager()` controlla direttamente `Bus::active`; il messaggio afferma che l'app non avvia il servizio.
-- `src-tauri/src/lib.rs:691-707,712-731`: tray e CloseRequested Linux esistono gia. La X nasconde solo se la creazione tray e riuscita e un StatusNotifier host risulta registrato; altrimenti mantiene aperta la finestra. Non e corretto diagnosticare questa versione come priva di close-to-tray su Linux.
-- `src-tauri/src/lib.rs:520-558`: `request_exit` interrompe i worker, attende il monitor, arresta/ripristina l'audio e infine chiama `app.exit(0)`. Non sostituirlo con un exit diretto.
-- `src-tauri/src/lib.rs:626-674`: worker e timer batterie sono Rust/Tokio, non JavaScript. SIGINT/SIGTERM richiedono gia l'uscita ordinata.
-- `src-tauri/src/lib.rs:739-747`: ogni ExitRequested non pronto attualmente avvia shutdown. Va distinto dall'uscita esplicita.
-- `src-tauri/src/commands.rs:129-132`: `exit_app` esiste ed e registrato nell'invoke handler.
-- `src/App.tsx:54-90`, `src/api.ts:66-70`: il frontend sottoscrive snapshot; nessuna attivita audio/hardware critica dipende da timer JS o dalla visibilita.
-- `src-tauri/capabilities/default.json`: finestra `main` e listener eventi; gestione tray/window Rust non richiede nuovi permessi IPC.
-- Worktree iniziale: modifica preesistente a `src-tauri/src/providers/headsetcontrol.rs`. Non alterarla, ripristinarla o includerla come modifica del task.
+- `src/components/Controls.tsx:55-109` mostra il campo numerico solo nel fallback; `MousePanel.tsx` ha gia bozza, assi e Applica. `src/api.ts` e Rust validano gia DPI discreti/range/step.
+- `src/types.ts`, `models.rs` e IPC non espongono rimappatura. Il gate hardwareAvailable attuale non deve disabilitare una rimappatura software quando il mouse non ha DPI scrivibili.
+- `devices.rs::usb_device` esclude attualmente i vendor generici: il backend input dovra rendere visibili anche quei mouse, senza fabbricare DPI, polling o batteria.
+- Il bundle attuale genera DEB/RPM/AppImage e dichiara soltanto alcune dipendenze audio. Non esistono installer completi o PKGBUILD.
+- Input Remapper stabile 2.2.1 non espone get_groups/get_running_preset del ramo attuale. L'Injector stabile inoltre indovina un altro origin_hash se quello salvato non esiste e puo risultare RUNNING dopo grab parziale. Questi comportamenti non sono accettabili per i preset gestiti dall'app.
+- L'autoload standard usa anche nomi di gruppo/modello e non dimostra identita fisica: non usarlo per l'automatismo richiesto dall'utente.
+- MIT dell'app gia presente in LICENSE, Cargo.toml e package.json. Input Remapper e HeadsetControl sono GPL: componenti/processi separati, attribuzioni e sorgenti corrispondenti obbligatori, senza cambiare arbitrariamente licenza dell'app.
 
-## Decisioni Confermate
+## Architettura Scelta
 
-- Tray Tauri standard con menu su Linux. L'utente accetta che click/doppio click Linux non realizzino un toggle: questi eventi non sono emessi da Tauri. Niente backend StatusNotifier custom.
-- Se creazione tray o host StatusNotifier falliscono, la X mantiene visibile la finestra con diagnostica, senza terminare il processo. Nascondere solo con tray utilizzabile.
-- Conservare shutdown audio ordinato, single-instance e menu finestra esistente. Tutte le azioni Esci convergono su `request_exit`, come `exit_app`. La X Linux non avvia shutdown; SIGTERM/SIGINT continuano a farlo per il cleanup del sistema operativo.
-- Autostart del daemon a ogni ingresso in `manager()`, non autostart dell'app al login. `systemctl start` e idempotente e non deve diventare restart/enable.
+1. **GUI Tauri:** prepara bozze, valida, invoca IPC, mostra solo stato osservato. Non apre /dev/input e non avvia programmi root.
+2. **Core Rust condiviso:** identita mouse, capabilities, storage versionato, compilazione di preset e client DBus. Nessuna dipendenza da finestre nel core.
+3. **Agente per utente:** binario `peripheral-hub-remapping-agent`, systemd user unit omonima, senza GUI. Gestisce applicazione e riattivazione dei profili desiderati; continua dopo Esci. Singleton e lock interprocesso impediscono concorrenza con la GUI.
+4. **Backend di sistema privato:** engine Input Remapper 2.2.1 congelato e bridge GPL versionato, installati sotto `/usr/lib/peripheral-hub/` e gestiti da `peripheral-hub-input-remapper.service`. Usare bus `io.peripheralhub.InputRemapper`, oggetto `/io/peripheralhub/InputRemapper`, interfaccia `io.peripheralhub.InputRemapper1`. Non sostituire il pacchetto, il bus, la configurazione o i servizi Input Remapper eventualmente gia installati.
 
-Fonti API verificate: https://v2.tauri.app/learn/system-tray/#listen-to-tray-events e https://docs.rs/tauri/2.12.5/tauri/macro.include_image.html. La macro PNG risolve il percorso da CARGO_MANIFEST_DIR; non richiede decodifica immagini runtime.
+Il backend privato elimina la dipendenza AUR e la necessaria modifica di daemon condivisi su tutte le distro. Il kernel grab rimane esclusivo: un altro remapper attivo provoca Busy/NO_GRAB, mai stop o takeover automatico del servizio esterno.
 
-## 1. Cargo e Config
+## Esecuzione Ordinata
 
-Nessuna modifica necessaria a `Cargo.toml`: conservare queste righe gia presenti, inclusa l'opzionalita desktop.
+### 1. Contratti e Storage
 
-```toml
-tauri = { version = "2", features = ["tray-icon"], optional = true }
-tokio = { version = "1", features = ["process", "time", "sync", "io-util", "rt-multi-thread", "macros", "signal"] }
-```
+- Aggiungere modelli Rust/TypeScript per pulsanti, sorgenti input, azioni, identita persistente, stato desiderato e stato osservato. Capabilities rimappatura separate dalle capabilities DPI/polling e dal provider hardware principale.
+- Una configurazione persistente per identita mouse, schema v1, in un file dedicato XDG dell'app, separato dai profili audio. Campi essenziali: UUID, fingerprint/forza identita, bindings, enabled, autoApply, pausedForSafety e revisione.
+- Riutilizzare limiti e scritture atomiche di profiles.rs; aggiungere locking tra processi, ownership e permessi privati, rifiuto traversal/symlink, dimensioni e codici bounded. Schema futuro sconosciuto -> diagnostica e nessuna attivazione automatica; nessuna migrazione dati audio.
+- Rappresentare azioni come enum e codici validati, non espressioni libere. Per scorciatoie consentire modificatori e un solo tasto principale, senza DSL arbitrario.
 
-Nessuna modifica a `tauri.conf.json`, capabilities, Cargo.lock o main.rs. `main` esiste, il PNG e gia in `icons/`, e la tray sara creata in Rust. Non aggiungere permessi shell/window al frontend, `image-png`, chiavi tray Tauri v1 o nuovi plugin.
+### 2. DPI Manuali
 
-## 2. Processo e Provider
+- Aggiornare Controls.tsx e MousePanel.tsx: input numerico sempre presente accanto allo slider/select, anche nei controlli compatti. Preservare stile e accessibilita; layout adattabile al mobile.
+- Bozza testuale distinta dal numero confermato: svuotamento e riscrittura validi come operazioni UI. Campo vuoto/invalido disabilita solo Applica DPI, senza inviare zero/NaN o applicare il vecchio valore.
+- Sincronizzare input/slider, X/Y collegati o separati, reset, cambio dispositivo e readback. Nessun invio durante digitazione; nessun arrotondamento silenzioso. Usare validazione esistente min/max/step/discrete e mantenere set_dpi invariato.
+- DPI non scrivibili restano sola lettura; la rimappatura puo comunque essere disponibile. Non accoppiare invalidita DPI e Applica polling.
 
-In `src-tauri/src/process.rs`, estendere solo l'allowlist e aggiungere `assert!(allowed("systemctl"));` al test `rejects_shells_and_arbitrary_executables`. Il runner esistente usa Tokio, limiti output, timeout, kill e reap: non duplicarlo.
+### 3. Engine e Bridge Privati
 
-```rust
-fn allowed(executable: &str) -> bool {
-    matches!(
-        executable,
-        "pw-dump" | "wpctl" | "pipewire" | "headsetcontrol" | "ratbagd" | "systemctl"
-    )
-}
-```
+- Congelare Input Remapper a commit `e9a87d13480c3b1dee654b296578a8f4e2cd31d6` (tag 2.2.1), con checksum di sorgente e patch, packaging nativo e sorgenti GPL corrispondenti. Dipendenze Python/GTK fornite dai pacchetti distro; niente pip di sistema o installer Python via rete al runtime. Verificare e costruire le sorgenti nella pipeline, non sull'host utente come root; i download del gestore pacchetti restano verificati normalmente.
+- Aggiungere un bridge ristretto sopra l'engine, senza esporre le operazioni legacy stop_all/quit o DSL arbitrario sul nuovo bus. Protocollo v1: versione; inventory dei mouse/nodi reali; snapshot stato/preset/identita; apply con identita, epoch e preset atteso; stop selettivo con preset atteso.
+- Inventory deve fornire capabilities EV_KEY, origin_hash calcolati dall'engine, bustype/VID/PID/uniq/phys e nodi/sysfs. Non leggere o pubblicare pressioni di tastiera. Escludere touchpad/keyboard-only e tutti i device virtuali/forwarded; per mouse compositi esporre solo gli input appartenenti alla stessa identita fisica verificata.
+- Metodo apply atomico lato daemon: aggiornare discovery, confrontare fingerprint ed epoch, controllare preset corrente atteso, leggere una sola volta il preset validato, quindi avviare. Stop usa lo stesso controllo expected-preset. Evitare check-then-write non atomici.
+- Verificare UID reale del chiamante tramite credenziali DBus, non un UID ricevuto dal frontend. Apply solo per sessione grafica locale attiva autorizzata; cleanup consentito al proprietario anche durante logout. Config/preset devono appartenere a quell'UID e avere formato/percorsi/codici consentiti.
+- Preset immutabili con UUID e hash del payload. Sorgenti devono contenere origin_hash verificati. Modalita managed strict: vietare il fallback dell'Injector verso un altro nodo e fallire su qualunque grab mancante, rilasciando quelli parziali. RUNNING non basta se parte della configurazione non e applicabile.
+- Stato confermato include identita effettiva, preset/hash e stato injector. Associare gli snapshot alla stessa generazione del daemon. Limiti output, timeout, no debug di eventi sensibili e release corretto dei tasti alla fermata.
 
-In `src-tauri/src/providers/openrazer.rs`, dentro `mod linux`, sostituire l'import HashSet con `use std::{collections::HashSet, time::Duration};` e sostituire interamente `manager()` con:
+### 4. Client, Discovery e UI Pulsanti
 
-```rust
-async fn manager() -> AppResult<Bus> {
-    let startup_error = crate::process::run(
-        "systemctl",
-        &["--user", "start", "openrazer-daemon"],
-        Duration::from_secs(5),
-    )
-    .await
-    .err();
-    let startup_detail = match &startup_error {
-        Some(error) => {
-            let detail = format!(
-                "systemctl --user start openrazer-daemon: {:?}; {}; {}",
-                error.code,
-                error.message,
-                bounded_text(error.detail.as_deref().unwrap_or("Nessun dettaglio."))
-            );
-            eprintln!("Avvio OpenRazer non riuscito: {detail}");
-            detail
-        }
-        None => "systemctl --user start openrazer-daemon: completato.".to_owned(),
-    };
-    tokio::time::sleep(Duration::from_millis(350)).await;
+- Implementare il client zbus nel core con verifica protocollo/owner/epoch e errori AppError espliciti. Non ricadere sulla CLI input-remapper-control, che puo far partire pkexec.
+- Associare a OpenRazer/ratbag/USB soltanto tramite seriale o percorso fisico verificato e univoco. Aggiungere veri mouse generici da inventory come Device Mouse con sole capabilities software; non confondere receiver e mouse o duplicare dispositivi gia associati.
+- Salvare sorgenti logiche e ricompilare gli origin_hash dopo hotplug: /dev/input/eventN non e un'identita persistente. Seriali unici preferiti; per mouse senza seriale indicare associazione per modello/porta e richiedere consenso esplicito per autoApply su identita debole. Ambiguita -> nessuna scrittura/riattivazione.
+- Nuova sezione Pulsanti: elenco rilevato, azione predefinita/clic/tasto/multimedia/scorciatoia, bozza, Applica, Ripristina originali e stato automatico. Acquisire scorciatoie solo in un controllo focalizzato, con annullamento; mai key listener globale persistente.
+- Nuovi IPC gestiscono configurazione, disattivazione e stato; il backend risolve l'identita e le capabilities, non accetta un path o codice non verificato dal frontend. Risposte stale non sovrascrivono lo stato corrente.
+- Verificare almeno un percorso di clic sinistro dopo le modifiche; non permettere di disabilitare tutte le vie al clic principale. Predefinito significa passthrough, non una scrittura superflua.
 
-    let result: AppResult<Bus> = async {
-        let bus = Bus::active(SERVICE, true).await?;
-        if !bus
-            .introspect(ROOT)
-            .await?
-            .method(MANAGER, "getDevices", "", "as")
-        {
-            return Err(invalid_data("OpenRazer non espone getDevices() -> as."));
-        }
-        Ok(bus)
-    }
-    .await;
+### 5. Agente e Lifecycle
 
-    result.map_err(|error| {
-        let message = if error.code == ErrorCode::ProviderMissing {
-            "OpenRazer non attivo sul session bus dopo il tentativo di avvio automatico. Verificare openrazer-daemon.service, driver e permessi dell'utente.".to_owned()
-        } else {
-            format!(
-                "OpenRazer non utilizzabile dopo il tentativo di avvio automatico: {}",
-                error.message
-            )
-        };
-        let detail = format!(
-            "{startup_detail}\nDBus ({:?}): {}; {}",
-            error.code,
-            error.message,
-            bounded_text(error.detail.as_deref().unwrap_or("Nessun dettaglio."))
-        );
-        AppError::new(error.code, message).detail(detail)
-    })
-}
-```
+- Aggiungere binario non grafico e user unit; riutilizzare il core senza AppHandle. Installer abilita l'unita nel contesto dell'utente normale; altri utenti possono abilitarla quando configurano l'automatismo, senza privilegi.
+- L'agente riconcilia file/revisione, inventory fisica e stato osservato. Applica solo configurazioni enabled e autoApply, con lock e CAS lato bridge, identita/capabilities attuali e retry limitato. Cambiamento owner invalida la cache.
+- Solo la sessione grafica locale attiva puo acquisire il mouse; niente multi-seat in questa versione. Logout/cambio utente rilascia solo injector propri, lasciando enabled per il login successivo. Non interferire con altri utenti o remapper esterni.
+- Applica GUI e agente condividono locking e revisione. Disattivazione salva prima enabled=false/autoApply=false sotto lock, poi stop selettivo verificato: non deve essere riapplicata immediatamente dal worker.
+- X/tray e Esci non fermano agente o engine privato. request_exit mantiene il cleanup audio esistente e termina soltanto la GUI. Non disattivare OpenRazer o altri servizi condivisi.
+- Pausa l'automatismo su stop volontario con device ancora connesso, errori persistenti o due scollegamenti rapidi di emergenza; evitare restart loop. Un nuovo Apply esplicito riattiva. Fornire `peripheral-hub-remapping-agent --disable-all` e una voce desktop Ripristina mouse che disabilitino solo le configurazioni dell'app.
 
-Il fallimento systemctl non impedisce l'uso di un daemon gia registrato su DBus, ad esempio avviato manualmente senza unit installata. Il fallimento DBus/introspection mantiene il proprio ErrorCode e include l'esito di avvio. `bounded_text` mantiene entrambi i dettagli entro il limite AppError, senza sommergere la causa DBus con stderr lungo. Tutti gli argomenti sono costanti: niente shell, sudo o comandi provenienti dal frontend.
+### 6. Pacchetti e Installer Completi
 
-Aggiornare solo la prima stringa di `limitations` a `openrazer.rs:503` in:
+- Aggiungere `packaging/` con rootfs risorse private, user/system unit, policy DBus, fonti/patch/attribuzioni, ricetta Arch, metadati DEB/RPM per Fedora e openSUSE, script build/install e manifest dei target. Riutilizzare i bundle Tauri, aggiungendo agente e backend privato; AppImage rimane portabile ma non viene descritta come installer dei servizi.
+- Ogni bundle completo contiene un pacchetto nativo dell'app con GUI, agente e engine privato, installer entry point e manifest verificabile. Nessuna build AUR richiesta agli utenti, nessuna dipendenza mancante affidata a un comando manuale.
+- Derivare versioni app da manifest esistenti; non modificare arbitrariamente 0.1.0. Estrarre dipendenze ELF/Python effettive tramite tooling nativo e controllo di import. Includere WebKitGTK 4.1, GTK/appindicator, Python >=3.10, evdev, psutil, dasbus, Cairo/PyGObject, Pydantic compatibile, packaging e GtkSource richiesti dal core.
+- Risolvere automaticamente anche PipeWire/WirePlumber/libmysofa, UPower, libratbag/ratbagd e OpenRazer daemon+DKMS. Mappare package manager e nomi per target, interrogando repo firmati e metadati reali, non presumendo equivalenza dei nomi tra distro.
+- HeadsetControl deve restare compatibile con l'attuale contratto JSON dell'app. Verificare CLI/API e ABI del target; se il repo non fornisce una versione conforme, includere un binario privato da release/sorgente congelata e licenziata. Preferire il CLI di sistema conforme dove gia presente; nessun downgrade, overwrite o ampliamento dei filtri vendor in questo task.
+- Entry point non-root: rilevare os-release/arch/init, verificare manifest, preflight e mostrare pacchetti/fonti/servizi/cambiamenti; ottenere autorizzazione; configurare eventuali repo upstream firmati; effettuare transazione nativa e fase sistema; tornare all'utente per enable/start delle user unit. Niente shell remota via curl-pipe, bypass firme, build root o systemctl --user eseguito come root per un altro utente.
+- Arch/CachyOS: pacman e pacchetti ufficiali per OpenRazer/libratbag; Input Remapper e integrato nel pacchetto privato, non una dipendenza AUR irrisolta. Ubuntu/Debian: apt e repo stabile ufficiale/upstream OpenRazer solo se necessario. Fedora: dnf e repo hardware:Razer ufficiale. openSUSE: zypper/OBS e dkms.service come richiesto dall'upstream.
+- Risolvere headers del kernel effettivo e verificare DKMS prima di dichiarare pronta la parte Razer. CachyOS usa il pkgbase reale, non linux-headers per supposizione; Fedora richiede kernel-devel corretto, non kernel-debug-devel. Non installare un altro kernel o disabilitare Secure Boot. Gruppi/udev/MOK e logout/reboot necessari devono risultare esplicitamente nella schermata finale.
+- Installazione completa proposta per tutti i backend, ma nessuna sostituzione silenziosa PulseAudio/session manager o probe ratbag senza consenso: mostrare tali cambiamenti prima della transazione. Se l'utente rifiuta, indicare componente non configurato, non successo completo.
+- Configurazione idempotente e riparazione: registrare cosa e stato creato, non sovrascrivere configurazioni esistenti e distinguere installed/running/pending-reboot/failed. Disinstallazione ferma solo componenti/injector privati dell'app; conserva dati utente salvo purge esplicito e non rimuove/spenge servizi esterni preesistenti.
 
-```rust
-"Unico proprietario delle scritture Razer: OpenRazer; l'app tenta l'avvio del daemon tramite systemctl --user."
-```
+### 7. Build, Test e Consegna
 
-Mantenere invariati discovery, firme DBus, NoAutoStart, identity checks e readback. Il servizio OpenRazer e posseduto da systemd, non dall'app: non arrestarlo durante `request_exit`.
+- Aggiungere pipeline/script Linux per build e packaging in ambienti puliti delle cinque famiglie. Registrare distro/versione/ABI nel manifest; produrre checksum, fonti GPL corrispondenti e artefatti firmabili. Pubblicazione release/repo/AUR, chiavi nuove, push e commit non sono autorizzati da questo piano.
+- Aggiornare README esistente con installazione completa, requisiti/reboot, riparazione, recovery, matrice reale e distinzione AppImage/installer. Niente documentazione separata non necessaria.
+- Non fermarsi a dropdown, stub IPC o liste di dipendenze: consegnare bridge, agente e risorse effettivamente inclusi, con verifiche riportate e gli eventuali target ancora non verificati chiaramente indicati.
 
-## 3. Helper e Routing Menu
+## Confini dei File
 
-In `src-tauri/src/lib.rs`, gli import menu/tray/AppHandle/Manager/StdMutex sono gia presenti. Sostituire `show_window`, aggiungere `toggle_window` e sostituire `menu_event` con questi blocchi completi:
+Modifiche previste: `Controls.tsx`, `MousePanel.tsx`, `src/api.ts`, `src/types.ts`, `src/styles.css`, test frontend; `models.rs`, `commands.rs`, `lib.rs`, `devices.rs`, `profiles.rs` per riuso, nuovo core remapping e binario agente; Cargo per binario/dependency strettamente necessari; `tauri.conf.json` per risorse/metadati; nuovo `packaging/` e test/pipeline Linux. HeadsetControl/process.rs solo se serve selezionare il CLI compatibile privato, senza cambiare parser/supporto vendor. Non toccare audio/surround/driver Razer implementativi per aggiungere nuovi modelli.
 
-```rust
-#[cfg(feature = "desktop")]
-fn show_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if let Err(error) = window.show() {
-            eprintln!("Mostra finestra: {error}");
-        }
-        if let Err(error) = window.unminimize() {
-            eprintln!("Ripristino finestra: {error}");
-        }
-        if let Err(error) = window.set_focus() {
-            eprintln!("Focus finestra: {error}");
-        }
-    }
-}
+## Validazione Obbligatoria
 
-#[cfg(feature = "desktop")]
-fn toggle_window(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    match (window.is_visible(), window.is_minimized()) {
-        (Ok(true), Ok(false)) => {
-            if let Err(error) = window.hide() {
-                eprintln!("Nascondi finestra: {error}");
-            }
-        }
-        (Ok(_), Ok(_)) => show_window(app),
-        (Err(error), _) | (_, Err(error)) => {
-            eprintln!("Stato finestra: {error}");
-            show_window(app);
-        }
-    }
-}
+- Frontend: input DPI valido/vuoto/out-of-range/step/discreto, X/Y, reset, readback, cambio mouse e nessun IPC durante digitazione; azioni/bozze, accessibilita e sorgenti non rilevate; demo e Windows unsupported.
+- Rust/Python: schema/percorsi/permessi/locking/hash, protocollo/owner/epoch, CAS e credenziali DBus, sorgenti reali/virtuali/duplicate, strict origin e grab totale, release dei modificatori, preset estraneo mai fermato, disabled non riapplicato, daemon restart, hotplug/porta debole, stop/emergency, sessione inattiva.
+- Eseguire npm test/build, cargo fmt/clippy/test desktop e no-default-features e test del bridge/core upstream rilevanti. Segnalare separatamente fallimenti baseline senza correggerli fuori scope.
+- Installer: lint e fixture distro/kernel/repo, checksum, pacchetti in ambienti puliti, dipendenze davvero risolte, installazione/upgrade/repair/idempotenza/fallimento parziale/uninstall. Verificare separazione root/user e servizi statici rispetto a quelli enableable.
+- VM Linux/systemd: login con GUI chiusa, apply, Esci, reconnect e reboot; un solo agente e injector, recovery funzionante, stack audio/configurazioni esterne preservati, DKMS/gruppi/reboot descritti correttamente.
+- Hardware reale X11 e Wayland con mouse Razer e generico: clic/scorciatoie e zero eventi duplicati; DPI hardware non rimappabili se non emettono input; motion/DPI/polling non degradati dal forwarding. Non dichiarare supportata una distro/ABI o un dispositivo senza verifica.
 
-#[cfg(feature = "desktop")]
-fn menu_event(app: &AppHandle, event: MenuEvent) {
-    match event.id().as_ref() {
-        "open" | "tray-open" => show_window(app),
-        "surround-off" => {
-            let app = app.clone();
-            let state = app.state::<Arc<AppState>>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = state
-                    .mutate_audio(&app, AudioMutation::Surround(false))
-                    .await;
-            });
-        }
-        "exit" | "tray-exit" => request_exit(app.clone()),
-        _ => {}
-    }
-}
-```
+## Fonti e Stato Attuale
 
-Conservare UNA registrazione globale `.on_menu_event(menu_event)` sul Builder esistente. Rimuovere la registrazione duplicata dal TrayIconBuilder: i callback menu Tauri sono globali, non limitati al singolo menu.
-
-## 4. Setup Tray
-
-Nel Builder di `run()`, mantenere plugin e invoke handler esistenti, incluso `commands::exit_app`, e sostituire l'intera closure `.setup(...)` con:
-
-```rust
-.setup(|app| {
-    let state = Arc::new(AppState::new()?);
-    app.manage(state.clone());
-    let open = MenuItem::with_id(app, "open", "Apri", true, None::<&str>)?;
-    let off = MenuItem::with_id(
-        app, "surround-off", "Disattiva 7.1", cfg!(target_os = "linux"), None::<&str>,
-    )?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let exit = MenuItem::with_id(app, "exit", "Esci", true, None::<&str>)?;
-    let window_menu = Menu::with_items(app, &[&open, &off, &separator, &exit])?;
-    app.set_menu(window_menu)?;
-
-    let tray_open = MenuItem::with_id(app, "tray-open", "Mostra / Apri", true, None::<&str>)?;
-    let tray_separator = PredefinedMenuItem::separator(app)?;
-    let tray_exit = MenuItem::with_id(app, "tray-exit", "Esci", true, None::<&str>)?;
-    let tray_menu = Menu::with_items(app, &[&tray_open, &tray_separator, &tray_exit])?;
-    let skip_release = StdMutex::new(false);
-    let tray = TrayIconBuilder::with_id("peripheral-hub")
-        .icon(tauri::include_image!("icons/32x32.png"))
-        .tooltip("Peripheral Hub")
-        .menu(&tray_menu)
-        .show_menu_on_left_click(false)
-        .on_tray_icon_event(move |tray, event| match event {
-            TrayIconEvent::Click {
-                button: MouseButton::Left, button_state: MouseButtonState::Down, ..
-            } => {
-                *skip_release.lock().unwrap_or_else(|error| error.into_inner()) = false;
-            }
-            TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
-                // Windows: il primo rilascio ha gia commutato la finestra.
-                *skip_release.lock().unwrap_or_else(|error| error.into_inner()) = true;
-            }
-            TrayIconEvent::Click {
-                button: MouseButton::Left, button_state: MouseButtonState::Up, ..
-            } => {
-                let skip = std::mem::take(
-                    &mut *skip_release.lock().unwrap_or_else(|error| error.into_inner()),
-                );
-                if !skip {
-                    toggle_window(tray.app_handle());
-                }
-            }
-            _ => {}
-        })
-        .build(app);
-    match tray {
-        Ok(_) => state.tray_created.store(true, Ordering::SeqCst),
-        Err(error) => eprintln!("Impossibile creare la tray: {error}"),
-    }
-    #[cfg(target_os = "linux")]
-    start_workers(app.handle(), &state);
-    Ok(())
-})
-```
-
-Tauri conserva la tray nella propria resource table dopo build: non e necessario aggiungere un altro handle ad AppState. PNG incorporato a build time, nessun path runtime fragile. Il reset su Down evita una soppressione rimasta pendente; la sequenza Windows Down/Up/DoubleClick/Up produce un solo toggle, senza un timer arbitrario. Su Linux questi callback e il flag left-click non hanno effetto: il ripristino supportato e il menu, come accettato dall'utente.
-
-## 5. CloseRequested e Uscita
-
-Mantenere `tray_host_available()` con timeout e controllo host gia presenti. Nel Builder sostituire la closure `.on_window_event(...)` con:
-
-```rust
-.on_window_event(|window, event| {
-    #[cfg(target_os = "linux")]
-    {
-        if window.label() != "main" {
-            return;
-        }
-        let tauri::WindowEvent::CloseRequested { api, .. } = event else {
-            return;
-        };
-        api.prevent_close();
-        let window = window.clone();
-        let app = window.app_handle().clone();
-        let state = app.state::<Arc<AppState>>().inner().clone();
-        if state.shutdown_started.load(Ordering::SeqCst) {
-            return;
-        }
-        tauri::async_runtime::spawn(async move {
-            let available = state.tray_created.load(Ordering::SeqCst)
-                && tray_host_available().await;
-            if state.shutdown_started.load(Ordering::SeqCst) {
-                return;
-            }
-            let hide_error = if available {
-                match window.hide() {
-                    Ok(()) => {
-                        state.publish(&app, |snapshot| {
-                            snapshot.diagnostics.retain(|item| item.id != "tray-unavailable");
-                        }).await;
-                        return;
-                    }
-                    Err(error) => Some(error.to_string()),
-                }
-            } else {
-                None
-            };
-            show_window(&app);
-            state.publish(&app, |snapshot| {
-                snapshot.diagnostics.retain(|item| item.id != "tray-unavailable");
-                let mut diagnostic = Diagnostic::new(
-                    "tray-unavailable", ProviderKind::App,
-                    if hide_error.is_some() { AvailabilityCode::Unknown } else { AvailabilityCode::Unsupported },
-                    Severity::Warning,
-                    if hide_error.is_some() {
-                        "Impossibile nascondere la finestra: resta aperta. Usa Esci per ripristinare l'audio e chiudere."
-                    } else {
-                        "Tray non utilizzabile: la finestra resta aperta. Usa Esci per ripristinare l'audio e chiudere."
-                    },
-                );
-                diagnostic.detail = hide_error;
-                snapshot.diagnostics.push(diagnostic);
-            }).await;
-        });
-    }
-    #[cfg(not(target_os = "linux"))]
-    let _ = (window, event);
-})
-```
-
-Non chiamare shutdown o abort worker da questo handler; non distruggere il webview. La diagnostica tray precedente viene eliminata dopo un hide riuscito. Il fallback controlla l'host a ogni X; se il pannello scompare quando la finestra e gia nascosta, si puo recuperarla rilanciando l'app tramite single-instance. Non aggiungere un nuovo monitor di pannello in questo task.
-
-Sostituire il callback finale `app.run(...)` con:
-
-```rust
-app.run(|app, event| {
-    if let tauri::RunEvent::ExitRequested { api, .. } = event {
-        let state = app.state::<Arc<AppState>>();
-        if !state.exit_ready.load(Ordering::SeqCst) {
-            api.prevent_exit();
-            #[cfg(not(target_os = "linux"))]
-            request_exit(app.clone());
-        }
-    }
-});
-```
-
-La guardia Linux impedisce exit accidentali senza innescare shutdown; il ramo non-Linux conserva il lifecycle attuale su piattaforme hardware unsupported. Mantenere integralmente `request_exit`, `exit_app`, registrazione segnali e `start_workers`: shutdown idempotente, abort/await worker, attesa monitor fino a 3 secondi, arresto DSP/ripristino default audio, `exit_ready = true`, infine `app.exit(0)`. Nessun exit diretto dai menu prima del cleanup.
-
-## Confini e Non-Obiettivi
-
-- Nessuna nuova politica di applicazione automatica dei profili audio: oggi i profili sono applicati esplicitamente.
-- Nessun autostart dell'app al login, installazione pacchetti, modifica unit systemd o elevazione privilegi.
-- Il report rate hardware viene impostato via provider, non generato da polling frontend. Hide preserva il processo e le impostazioni, non rende scrivibili mouse non supportati.
-- Restano le politiche esistenti che fermano surround su perdita del target, guasto PipeWire/DSP o HRTF invalido. Non modificarle per simulare continuita.
-- Nessuna migrazione di dati o profili; nessun nuovo comando exit duplicato; nessuna modifica al file headsetcontrol gia dirty.
-
-## Verifica Dopo Implementazione
-
-1. Controllare diff finale e preservazione di modifiche esterne. Eseguire dalla root `npm test` e `npm run build`; da `src-tauri`, `cargo fmt --all -- --check`, `cargo test --no-default-features --locked`, `cargo test --locked`, `cargo clippy --all-targets --locked -- -D warnings`. Verificare anche build desktop Linux reale; Windows non copre il provider cfg Linux. Segnalare problemi preesistenti senza formattare o correggere file esterni al task.
-2. OpenRazer Linux: daemon inizialmente fermo -> avvio applicazione -> systemctl start precede DBus -> dispositivi disponibili; daemon gia attivo -> nessun restart; unit/eseguibile mancanti e org.razer presente -> provider continua; assenza sia servizio sia org.razer -> diagnostica esplicita; timeout/AccessDenied -> codici e dettagli non perduti. Verificare con `systemctl --user show openrazer-daemon.service --property=LoadState,ActiveState,SubState --no-pager`.
-3. Tray Linux sul desktop target: icona e menu visibili, X ripetuta non termina processo, Mostra ripristina anche finestra minimizzata, una sola icona/istanza, menu utilizzabile anche se frontend non ha snapshot. Host assente/creazione fallita -> finestra visibile e warning; host recuperato -> hide riuscito e warning eliminato. Restart del pannello e riapertura tramite seconda istanza. Su Windows verificare singolo click e sequenza doppio click con un solo toggle; non dichiarare supportati gli eventi click Linux.
-4. Background: attivare surround/profilo, nascondere la finestra, osservare monitor e DSP ancora attivi, hotplug e aggiornamenti batterie, riaprire e verificare snapshot coerente; verificare report rate via readback. Osservazione audio con `wpctl status` e `pw-dump -N`.
-5. Esci tray ed exit_app: filtro terminato e default audio ripristinato, task/monitor conclusi, processo terminato, OpenRazer systemd non arrestato dall'app. Ripetizione Esci durante una mutazione/dialogo: nessun doppio shutdown. SIGTERM/SIGINT mantengono cleanup.
-
-## Stato della Validazione
-
-Solo analisi read-only. Nessun sorgente modificato e nessun build/test eseguito. L'ambiente e Windows; le verifiche runtime CachyOS/Arch richiedono Linux con session bus, PipeWire e tray host. Un tentativo di rilevare rustc e stato negato dalla policy degli strumenti e non e stato aggirato. Il subagent ha verificato `git diff --check` senza errori, con solo avviso LF/CRLF sul file headsetcontrol preesistente.
-
-## Consegna
-
-Modificare soltanto `src-tauri/src/providers/openrazer.rs`, `src-tauri/src/process.rs` e `src-tauri/src/lib.rs`, con test mirati nell'allowlist esistente. Formattare i blocchi Rust applicati secondo lo stile del progetto. Consegnare riepilogo modifiche e verifiche effettive, evidenziando che Cargo/config non richiedono cambiamenti e che su Linux la tray si usa tramite menu. Nessuna migrazione, installazione pacchetti o altra decisione bloccante aperta.
+- Input Remapper stable: https://github.com/sezanzeb/input-remapper/tree/2.2.1 ; commit congelato verificato via API GitHub. pyproject richiede Python >=3.10; mapping.py supporta Pydantic v1/v2; injector.py documenta fallback, grab e stati UNKNOWN/STARTING/RUNNING/STOPPED/FAILED/NO_GRAB.
+- https://github.com/sezanzeb/input-remapper/blob/main/inputremapper/daemon.py e groups.py: API del ramo attuale, identita e instabilita dei nomi di gruppi.
+- https://dasbus.readthedocs.io/en/latest/api/dasbus.server.interface.html: accepts_additional_arguments/call_info per credenziali del chiamante.
+- https://openrazer.github.io/#download: repo delle cinque famiglie, headers, plugdev, reboot, Secure Boot e dkms.service su openSUSE.
+- Cataloghi Arch verificati: openrazer-daemon/driver e libratbag in extra; headsetcontrol 4.1.0 in extra, versione CLI non prova di compatibilita JSON. Input Remapper upstream e AUR, evitato per l'installer con componente privato.
+- https://github.com/Sapd/HeadsetControl/releases/tag/4.2.0 e README upstream: artefatti firmati, source/DEB/RPM, requisiti di compilazione e udev. Validare il contratto JSON esistente prima di scegliere il binario.
+- In questa fase e stato modificato solo questo piano. Ambiente Windows senza WSL disponibile: nessuna build/installazione o prova runtime Linux eseguita. Niente decisioni utente bloccanti residue; restano le verifiche implementative esplicitamente elencate.

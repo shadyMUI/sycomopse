@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import type { CSSProperties } from "react";
-import { isDpiValueAllowed } from "../api";
+import { isDpiValueAllowed, parseDpiDraft } from "../api";
 import type { AudioNode, AudioSnapshot, AvailabilityCode, Battery, Device, DpiCapability, HubApi, ProviderKind, Snapshot } from "../types";
 
 export type RunMutation = (key: string, operation: () => Promise<Snapshot>) => Promise<boolean>;
@@ -12,7 +12,7 @@ export interface MutationControls {
 
 export const providerNames: Record<ProviderKind, string> = {
   openrazer: "OpenRazer", ratbag: "ratbagd", upower: "UPower",
-  headsetcontrol: "HeadsetControl", pipewire: "PipeWire", usb: "USB", app: "Applicazione",
+  headsetcontrol: "HeadsetControl", pipewire: "PipeWire", inputremapper: "Input Remapper", usb: "USB", app: "Applicazione",
 };
 
 export const availabilityNames: Record<AvailabilityCode, string> = {
@@ -52,20 +52,26 @@ function rangeStyle(value: number, min: number, max: number): CSSProperties {
   return { "--range-fill": `${max > min ? Math.max(0, Math.min(100, (value - min) / (max - min) * 100)) : 0}%` } as CSSProperties;
 }
 
-export function DpiControl({ capability, value, label = "DPI desiderati", disabled = false, reason, onChange }: {
-  capability: DpiCapability | null; value: number | null; label?: string; disabled?: boolean;
-  reason?: string | null; onChange: (value: number) => void;
+export function DpiControl({ capability, draft, label = "DPI desiderati", manualLabel = "DPI manuali", disabled = false, reason, onChange }: {
+  capability: DpiCapability | null; draft: string; label?: string; manualLabel?: string; disabled?: boolean;
+  reason?: string | null; onChange: (draft: string) => void;
 }) {
   const id = useId();
   const values = capability?.values;
   const known = values && values.kind !== "unknown" && (values.kind === "discrete" ? values.values.length > 0 : values.step > 0 && values.max >= values.min);
-  const writable = known && capability?.writable && !disabled;
+  const writable = !!(known && capability?.writable && !disabled);
   const explanation = reason || capability?.reason || (!known ? "Le capabilities DPI non sono disponibili. Nessun intervallo viene presunto." : !capability?.writable ? "DPI in sola lettura per questo provider." : null);
+  const value = parseDpiDraft(draft);
   const valid = values !== undefined && isDpiValueAllowed(values, value);
-  const valueLabel = value === null ? "Non letto" : `${value} DPI`;
+  const valueLabel = writable && !valid ? draft === "" ? "Bozza vuota" : "Bozza non valida" : value === null ? "Non letto" : `${value} DPI`;
+  const manual = <div className="dpi-manual-field"><label htmlFor={`${id}-manual`}>{manualLabel}</label>
+    <input id={`${id}-manual`} type="text" inputMode="numeric" autoComplete="off" spellCheck={false}
+      value={draft} readOnly={!writable} aria-invalid={writable && !valid}
+      aria-describedby={writable && !valid ? `${id}-invalid` : explanation ? `${id}-reason` : `${id}-bounds`}
+      placeholder="Non letto" onChange={(event) => { if (writable) onChange(event.target.value); }} /></div>;
 
   if (!known || !values) {
-    return <div className="dpi-control"><span className="field-label">{label}</span><strong className="read-only-value">{valueLabel}</strong><p className="control-reason">{explanation}</p></div>;
+    return <div className="dpi-control"><div className="field-heading"><span className="field-label">{label}</span><output>{valueLabel}</output></div>{manual}<p id={`${id}-reason`} className="control-reason">{explanation}</p></div>;
   }
 
   const min = values.kind === "discrete" ? 0 : values.min;
@@ -74,36 +80,30 @@ export function DpiControl({ capability, value, label = "DPI desiderati", disabl
 
   return (
     <div className="dpi-control">
-      <div className="field-heading"><label htmlFor={id}>{label}</label><output htmlFor={id}>{valueLabel}</output></div>
-      {position !== null ? (
+      <div className="field-heading"><span className="field-label">{label}</span><output htmlFor={`${id} ${id}-manual`}>{valueLabel}</output></div>
+      <div className="dpi-input-row"><div className="dpi-position-control">{position !== null ? (
         <>
           <input id={id} className="range-input" type="range" min={min} max={max} step={values.kind === "discrete" ? 1 : values.step}
-            value={position} aria-valuetext={`${value} DPI`} disabled={!writable}
+            value={position} aria-label={label} aria-valuetext={`${value} DPI`} disabled={!writable}
             aria-describedby={explanation ? `${id}-reason` : `${id}-bounds`} style={rangeStyle(position, min, max)}
             onChange={(event) => {
               const next = Number(event.target.value);
-              onChange(values.kind === "discrete" ? values.values[next] : next);
+              if (writable) onChange(String(values.kind === "discrete" ? values.values[next] : next));
             }} />
           <div className="range-bounds" id={`${id}-bounds`}><span>{values.kind === "discrete" ? values.values[0] : min} DPI</span><span>{values.kind === "discrete" ? values.values[values.values.length - 1] : max} DPI</span></div>
-          {values.kind === "discrete" && <p className="control-hint">Posizioni discrete: {values.values.join(" / ")} DPI</p>}
         </>
       ) : (
         <div className="invalid-dpi">
-          <p id={`${id}-invalid`} className="control-reason">{value === null ? "Nessuna lettura confermata." : "Valore letto fuori dai valori ammessi."} Scegli un DPI valido prima di applicare.</p>
-          {writable && (values.kind === "discrete" ? (
-            <select id={id} aria-label={`Scegli ${label}`} aria-describedby={`${id}-invalid`} value="" onChange={(event) => onChange(Number(event.target.value))}>
+          {writable && values.kind === "discrete" ? (
+            <select id={id} aria-label={`Scegli ${label}`} aria-describedby={`${id}-invalid`} value="" onChange={(event) => onChange(event.target.value)}>
               <option value="" disabled>Scegli un valore valido</option>
               {values.values.map((dpi) => <option key={dpi} value={dpi}>{dpi} DPI</option>)}
             </select>
-          ) : (
-            <input id={id} type="number" aria-label={`Scegli ${label}`} aria-describedby={`${id}-invalid`} min={values.min} max={values.max} step={values.step}
-              placeholder={`${values.min} - ${values.max}`} onChange={(event) => {
-                const next = event.target.value === "" ? null : Number(event.target.value);
-                if (isDpiValueAllowed(values, next) && next !== null) onChange(next);
-              }} />
-          ))}
+          ) : <p className="control-hint">{values.kind === "range" ? `${values.min} - ${values.max} DPI / passo ${values.step}` : "Nessuna posizione valida selezionata."}</p>}
         </div>
-      )}
+      )}</div>{manual}</div>
+      {writable && !valid && <p id={`${id}-invalid`} className="control-reason">{draft === "" ? "Campo DPI vuoto." : "DPI non valido per questo mouse."} Inserisci un intero ammesso prima di applicare; nessun valore viene arrotondato.</p>}
+      {values.kind === "discrete" && <p className="control-hint">Posizioni discrete: {values.values.join(" / ")} DPI</p>}
       {explanation && <p id={`${id}-reason`} className="control-reason">{explanation}</p>}
     </div>
   );

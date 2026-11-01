@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "architecture": "x86_64",
+  "init": "systemd",
+  "python_min": "3.10",
+  "openrazer_min": "3.12.4",
+  "sources": {
+    "openrazer": "https://openrazer.github.io/#download",
+    "input_remapper": "https://github.com/sezanzeb/input-remapper/tree/e9a87d13480c3b1dee654b296578a8f4e2cd31d6",
+    "headsetcontrol": "https://github.com/Sapd/HeadsetControl/releases/tag/4.2.0"
+  },
+  "repository_keys": {
+    "obs_hardware": "E96C496E4E77C159C2FCA053062F9FD4D6D11CE4",
+    "openrazer_ppa": "903936CAB6049E2E6C33D5D8073E051D7B2AEE37"
+  },
+  "targets": [
+    {
+      "id": "arch", "os_id": "arch", "version_ids": [], "rolling": true,
+      "image": "docker.io/archlinux:base-devel", "manager": "pacman", "format": "arch",
+      "runtime": ["glibc", "gcc-libs", "gtk3", "webkit2gtk-4.1", "libayatana-appindicator", "libmysofa", "pipewire", "dbus", "systemd", "polkit", "python>=3.10", "python-evdev>=1.6.1", "python-psutil", "python-dasbus", "python-cairo", "python-gobject", "python-pydantic", "python-packaging", "gtksourceview4"],
+      "audio": ["pipewire", "pipewire-audio", "wireplumber"], "pulse": ["pipewire-pulse"],
+      "ratbag": ["libratbag", "upower"], "razer": ["openrazer-daemon", "openrazer-driver-dkms", "dkms"],
+      "headset": ["hidapi"], "headset_build": "source",
+      "build": ["base-devel", "git", "nodejs", "npm", "cmake", "ninja", "hidapi", "gtk3", "webkit2gtk-4.1", "libayatana-appindicator", "librsvg", "zstd", "binutils", "desktop-file-utils", "sudo"],
+      "repository": null
+    },
+    {
+      "id": "cachyos", "os_id": "cachyos", "version_ids": [], "rolling": true,
+      "image": "docker.io/cachyos/cachyos:latest", "manager": "pacman", "format": "arch",
+      "inherit": "arch"
+    },
+    {
+      "id": "ubuntu-22.04", "os_id": "ubuntu", "version_ids": ["22.04"], "codename": "jammy",
+      "image": "docker.io/library/ubuntu:22.04", "manager": "apt", "format": "deb",
+      "runtime": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1", "libmysofa1", "pipewire-bin", "dbus", "systemd", "policykit-1", "python3 (>= 3.10)", "python3-evdev", "python3-psutil", "python3-dasbus", "python3-cairo", "python3-gi", "python3-pydantic", "python3-packaging", "gir1.2-gtk-3.0", "gir1.2-gtksource-4"],
+      "audio": ["pipewire", "pipewire-bin", "wireplumber"], "pulse": ["pipewire-pulse"],
+      "ratbag": ["ratbagd", "upower"], "razer": ["openrazer-daemon", "openrazer-driver-dkms", "dkms"],
+      "headset": ["libhidapi-hidraw0"], "headset_build": "release",
+      "build": ["build-essential", "git", "curl", "ca-certificates", "pkg-config", "libwebkit2gtk-4.1-dev", "libgtk-3-dev", "libayatana-appindicator3-dev", "librsvg2-dev", "libssl-dev", "cmake", "ninja-build", "libhidapi-dev", "dpkg-dev", "zstd", "binutils", "desktop-file-utils", "sudo"],
+      "repository": {"kind": "ppa", "url": "https://ppa.launchpadcontent.net/openrazer/stable/ubuntu", "key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x903936CAB6049E2E6C33D5D8073E051D7B2AEE37", "key": "openrazer_ppa"}
+    },
+    {
+      "id": "ubuntu-24.04", "os_id": "ubuntu", "version_ids": ["24.04"], "codename": "noble",
+      "image": "docker.io/library/ubuntu:24.04", "manager": "apt", "format": "deb",
+      "inherit": "ubuntu-22.04", "headset_build": "source",
+      "runtime_replace": {"libgtk-3-0": "libgtk-3-0t64", "libayatana-appindicator3-1": "libayatana-appindicator3-1", "policykit-1": "polkitd"}
+    },
+    {
+      "id": "ubuntu-26.04", "os_id": "ubuntu", "version_ids": ["26.04"], "codename": "resolute",
+      "image": "docker.io/library/ubuntu:26.04", "manager": "apt", "format": "deb",
+      "inherit": "ubuntu-24.04"
+    },
+    {
+      "id": "debian-12", "os_id": "debian", "version_ids": ["12"], "codename": "bookworm",
+      "image": "docker.io/library/debian:12", "manager": "apt", "format": "deb",
+      "inherit": "ubuntu-22.04",
+      "repository": {"kind": "obs-deb", "url": "https://download.opensuse.org/repositories/hardware:/razer/Debian_12", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/Debian_12/Release.key", "key": "obs_hardware"}
+    },
+    {
+      "id": "debian-13", "os_id": "debian", "version_ids": ["13"], "codename": "trixie",
+      "image": "docker.io/library/debian:13", "manager": "apt", "format": "deb",
+      "inherit": "debian-12", "headset_build": "source",
+      "runtime_replace": {"libgtk-3-0": "libgtk-3-0t64", "policykit-1": "polkitd"},
+      "repository": {"kind": "obs-deb", "url": "https://download.opensuse.org/repositories/hardware:/razer/Debian_13", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/Debian_13/Release.key", "key": "obs_hardware"}
+    },
+    {
+      "id": "fedora-44", "os_id": "fedora", "version_ids": ["44"], "support_until": "2027-05-01",
+      "image": "registry.fedoraproject.org/fedora:44", "manager": "dnf", "format": "rpm",
+      "runtime": ["webkit2gtk4.1", "gtk3", "libayatana-appindicator-gtk3", "libmysofa", "pipewire", "dbus", "systemd", "polkit", "python3 >= 3.10", "python3-evdev >= 1.6.1", "python3-psutil", "python3-dasbus", "python3-cairo", "python3-gobject", "python3-pydantic", "python3-packaging", "gtksourceview4"],
+      "audio": ["pipewire", "wireplumber"], "pulse": ["pipewire-pulseaudio"],
+      "ratbag": ["libratbag-ratbagd", "upower"], "razer": ["openrazer-meta", "dkms"],
+      "headset": ["hidapi"], "headset_build": "source",
+      "build": ["gcc", "gcc-c++", "make", "git", "nodejs", "npm", "cmake", "ninja-build", "pkgconf-pkg-config", "webkit2gtk4.1-devel", "gtk3-devel", "libayatana-appindicator-gtk3-devel", "librsvg2-devel", "openssl-devel", "hidapi-devel", "rpm-build", "rpmdevtools", "cpio", "zstd", "binutils", "desktop-file-utils", "sudo", "dnf-plugins-core"],
+      "repository": {"kind": "obs-rpm", "url": "https://download.opensuse.org/repositories/hardware:/razer/Fedora_44", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/Fedora_44/repodata/repomd.xml.key", "key": "obs_hardware"}
+    },
+    {
+      "id": "opensuse-leap-16.0", "os_id": "opensuse-leap", "version_ids": ["16.0"],
+      "image": "registry.opensuse.org/opensuse/leap:16.0", "manager": "zypper", "format": "rpm",
+      "runtime": ["libwebkit2gtk-4_1-0", "libgtk-3-0", "libayatana-appindicator3-1", "libmysofa1", "pipewire", "dbus-1", "systemd", "polkit", "python3 >= 3.10", "python3-evdev >= 1.6.1", "python3-psutil", "python3-dasbus", "python3-pycairo", "python3-gobject", "python3-pydantic", "python3-packaging", "typelib-1_0-Gtk-3_0", "typelib-1_0-GtkSource-4"],
+      "audio": ["pipewire", "pipewire-tools", "wireplumber"], "pulse": ["pipewire-pulseaudio"],
+      "ratbag": ["ratbagd", "upower"], "razer": ["openrazer-meta", "dkms"],
+      "headset": ["libhidapi-hidraw0"], "headset_build": "source",
+      "build": ["gcc", "gcc-c++", "make", "git", "nodejs22", "npm22", "cmake", "ninja", "pkg-config", "pkgconfig(webkit2gtk-4.1)", "gtk3-devel", "libayatana-appindicator3-devel", "librsvg-devel", "libopenssl-devel", "hidapi-devel", "rpm-build", "cpio", "zstd", "binutils", "desktop-file-utils", "sudo"],
+      "repository": {"kind": "obs-rpm", "url": "https://download.opensuse.org/repositories/hardware:/razer/openSUSE_Leap_16.0", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/openSUSE_Leap_16.0/repodata/repomd.xml.key", "key": "obs_hardware"},
+      "python_aliases": ["python313", "python312", "python311"]
+    },
+    {
+      "id": "opensuse-tumbleweed", "os_id": "opensuse-tumbleweed", "version_ids": [], "rolling": true,
+      "image": "registry.opensuse.org/opensuse/tumbleweed:latest", "manager": "zypper", "format": "rpm",
+      "inherit": "opensuse-leap-16.0",
+      "repository": {"kind": "obs-rpm", "url": "https://download.opensuse.org/repositories/hardware:/razer/openSUSE_Tumbleweed", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/openSUSE_Tumbleweed/repodata/repomd.xml.key", "key": "obs_hardware"}
+    }
+  ]
+}

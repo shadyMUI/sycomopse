@@ -16,6 +16,10 @@ name = "peripheral-hub"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+[[bin]]
+name = "peripheral-hub-remapping-agent"
+path = "src/bin/remapping_agent.rs"
+
 [features]
 default = ["desktop"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
@@ -34,6 +38,8 @@ tokio = { version = "1", features = ["process", "time", "sync", "io-util", "rt-m
 thiserror = "2"
 directories = "6"
 uuid = { version = "1", features = ["v4", "serde"] }
+fs2 = "0.4"
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }

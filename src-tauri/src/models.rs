@@ -83,6 +83,7 @@ pub enum ProviderKind {
     Ratbag,
     Upower,
     Headsetcontrol,
+    Inputremapper,
     Pipewire,
     Usb,
     App,
@@ -209,6 +210,78 @@ pub struct PollingCapability {
 pub struct DeviceCapabilities {
     pub dpi: Option<DpiCapability>,
     pub polling: Option<PollingCapability>,
+    pub remapping: Option<RemappingCapability>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RemappingIdentityStrength {
+    Serial,
+    Port,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MouseButtonDescriptor {
+    pub id: String,
+    pub label: String,
+    pub code: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemappingCapability {
+    pub provider: ProviderKind,
+    pub availability: AvailabilityCode,
+    pub writable: bool,
+    pub fingerprint: Option<String>,
+    pub identity_strength: Option<RemappingIdentityStrength>,
+    pub buttons: Vec<MouseButtonDescriptor>,
+    pub key_codes: Vec<u16>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum MouseAction {
+    Default,
+    MouseButton { code: u16 },
+    Key { code: u16 },
+    Chord { modifiers: Vec<u16>, key: u16 },
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MouseBinding {
+    pub button_id: String,
+    pub action: MouseAction,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RemappingRuntimeState {
+    #[default]
+    Unavailable,
+    Inactive,
+    Starting,
+    Active,
+    Busy,
+    Error,
+    Paused,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RemappingValues {
+    pub state: RemappingRuntimeState,
+    pub enabled: bool,
+    pub auto_apply: bool,
+    pub paused_for_safety: bool,
+    pub profile_id: Option<String>,
+    pub bindings: Vec<MouseBinding>,
+    pub active_preset: Option<String>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -247,6 +320,7 @@ pub struct DeviceValues {
     pub dpi: Option<DpiValue>,
     pub polling_rate: Option<u32>,
     pub battery: Option<Battery>,
+    pub remapping: Option<RemappingValues>,
     #[serde(skip)]
     pub staged: bool,
 }

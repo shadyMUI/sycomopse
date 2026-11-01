@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
@@ -79,6 +79,122 @@ describe("dashboard dinamica e confine demo", () => {
 });
 
 describe("controlli mouse e readback", () => {
+  it.each(["", "abc", "0", "99", "30001", "850", "800.5", "1e3"])("conserva DPI digitati %j senza IPC e disabilita solo Applica DPI", async (value) => {
+    const user = userEvent.setup();
+    const api = createDemoApi(1);
+    const setDpi = vi.spyOn(api, "setDpi");
+    const setRate = vi.spyOn(api, "setPollingRate");
+    await dashboard(api);
+    await user.click(screen.getByRole("tab", { name: /Mouse/ }));
+    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    fireEvent.change(manual, { target: { value } });
+    expect(manual).toHaveValue(value);
+    expect(manual).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Collega assi X/Y" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /500\s*Hz/ }));
+    expect(screen.getByRole("button", { name: "Applica polling" })).toBeEnabled();
+    expect(setDpi).not.toHaveBeenCalled();
+    expect(setRate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    expect(setDpi).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Applica polling" }));
+    expect(setRate).toHaveBeenCalledWith("demo-viper-1", 500);
+    expect(manual).toHaveValue(value);
+    expect(screen.getByText("800 DPI", { selector: "strong" })).toBeVisible();
+  });
+
+  it("sincronizza DPI manuali e slider compatti, reset e readback senza invii digitando", async () => {
+    const user = userEvent.setup();
+    const api = createDemoApi(1);
+    const setDpi = vi.spyOn(api, "setDpi");
+    await dashboard(api);
+    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    expect(manual).toHaveValue("800");
+    await user.clear(manual);
+    await user.type(manual, "1200");
+    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("1200");
+    expect(setDpi).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("slider", { name: "DPI desiderati" }), { target: { value: "1600" } });
+    expect(manual).toHaveValue("1600");
+    await user.click(screen.getByRole("button", { name: "Ripristina bozza" }));
+    expect(manual).toHaveValue("800");
+    await user.clear(manual);
+    await user.type(manual, "1200");
+    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    expect(setDpi).toHaveBeenCalledWith("demo-viper-1", 1200, 1200);
+    await waitFor(() => expect(screen.getByText("1200 DPI", { selector: "strong" })).toBeVisible());
+    expect(manual).toHaveValue("1200");
+    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+  });
+
+  it("conserva la bozza manuale discreta fuori elenco e accetta soltanto i valori esposti", async () => {
+    const user = userEvent.setup();
+    const api = createDemoApi();
+    const setDpi = vi.spyOn(api, "setDpi");
+    await dashboard(api);
+    await user.selectOptions(screen.getByLabelText("Mouse dei controlli rapidi"), "demo-g305-1");
+    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    await user.clear(manual);
+    await user.type(manual, "1500");
+    expect(manual).toHaveValue("1500");
+    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Scegli DPI desiderati" })).toBeVisible();
+    await user.clear(manual);
+    await user.type(manual, "3200");
+    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("3");
+    expect(setDpi).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    expect(setDpi).toHaveBeenCalledWith("demo-g305-1", 3200, 3200);
+  });
+
+  it("mantiene bozze stringa X/Y, invalidita e reset di entrambi gli assi", async () => {
+    const user = userEvent.setup();
+    const api = createDemoApi(1);
+    const setDpi = vi.spyOn(api, "setDpi");
+    await dashboard(api);
+    await user.click(screen.getByRole("tab", { name: /Mouse/ }));
+    await user.click(screen.getByRole("switch", { name: "Collega assi X/Y" }));
+    const x = screen.getByRole("textbox", { name: "DPI X manuali" });
+    const y = screen.getByRole("textbox", { name: "DPI Y manuali" });
+    fireEvent.change(x, { target: { value: "1200" } });
+    fireEvent.change(y, { target: { value: "" } });
+    expect(x).toHaveValue("1200");
+    expect(y).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Ripristina bozza" }));
+    expect(x).toHaveValue("800");
+    expect(y).toHaveValue("800");
+    fireEvent.change(x, { target: { value: "1200" } });
+    fireEvent.change(y, { target: { value: "1600" } });
+    expect(setDpi).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    expect(setDpi).toHaveBeenCalledWith("demo-viper-1", 1200, 1600);
+    await waitFor(() => expect(screen.getByText("X 1200 / Y 1600 DPI", { selector: "strong" })).toBeVisible());
+    await user.click(screen.getByRole("switch", { name: "Collega assi X/Y" }));
+    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveValue("1200");
+    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    expect(setDpi).toHaveBeenLastCalledWith("demo-viper-1", 1200, 1200);
+  });
+
+  it("riconcilia le bozze DPI con readback recenti e resetta gli invalidi cambiando mouse", async () => {
+    const user = userEvent.setup();
+    const initial = await createDemoApi().getSnapshot();
+    const { api, emit } = controlledApi(initial);
+    await dashboard(api);
+    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    fireEvent.change(manual, { target: { value: "bad" } });
+    const next = clone(initial);
+    next.revision = 2;
+    next.devices[0].values.dpi = { x: 1800, y: 1800 };
+    act(() => emit(next));
+    expect(manual).toHaveValue("1800");
+    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("1800");
+    fireEvent.change(manual, { target: { value: "" } });
+    await user.selectOptions(screen.getByLabelText("Mouse dei controlli rapidi"), "demo-g305-1");
+    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveValue("1600");
+  });
+
   it("azzera la bozza cambiando mouse e applica DPI discreti per posizione, non per range", async () => {
     const user = userEvent.setup();
     const api = createDemoApi();
@@ -189,6 +305,336 @@ describe("controlli mouse e readback", () => {
     await screen.findByRole("alert");
     expect(screen.getByText("800 DPI", { selector: "strong" })).toBeVisible();
     expect(getSnapshot).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("pulsanti rilevati, bozze e privacy", () => {
+  async function buttonsView(api: HubApi) {
+    const user = userEvent.setup();
+    await dashboard(api);
+    await user.click(screen.getByRole("tab", { name: /Mouse/ }));
+    return { user, panel: within(screen.getByRole("region", { name: /Pulsanti rilevati/ })) };
+  }
+
+  it("rimappa un mouse generico senza DPI scrivibili e usa solo sorgenti e target rilevati", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    const device = initial.devices[0];
+    device.name = "Mouse generico";
+    device.brand = "generic";
+    device.provider = "inputremapper";
+    device.availability = "providerMissing";
+    device.support = "unsupported";
+    device.capabilities.dpi = null;
+    device.capabilities.polling = null;
+    device.values.dpi = null;
+    device.values.pollingRate = null;
+    device.values.battery = null;
+    device.capabilities.remapping!.buttons = device.capabilities.remapping!.buttons.filter((button) => [272, 275].includes(button.code));
+    device.capabilities.remapping!.keyCodes = [272, 30];
+    const { api } = controlledApi(initial);
+    const result = clone(initial);
+    result.revision = 2;
+    result.devices[0].values.remapping = { ...device.values.remapping!, state: "active", enabled: true, bindings: [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], profileId: "generic-profile", activePreset: "generic-preset" };
+    const apply = vi.spyOn(api, "applyMouseRemapping").mockResolvedValue(result);
+    const setDpi = vi.spyOn(api, "setDpi");
+    const { user, panel } = await buttonsView(api);
+    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveAttribute("readonly");
+    expect(screen.queryByRole("slider", { name: "DPI desiderati" })).not.toBeInTheDocument();
+    expect(panel.getAllByRole("combobox", { name: /^Azione per/ })).toHaveLength(2);
+    expect(panel.queryByRole("combobox", { name: "Azione per Clic destro" })).not.toBeInTheDocument();
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
+    const target = panel.getByRole("combobox", { name: "Tasto per Laterale" });
+    expect(within(target).getAllByRole("option").map((option) => option.getAttribute("value"))).toEqual(["", "30"]);
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    await user.selectOptions(target, "30");
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
+    expect(apply).not.toHaveBeenCalled();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenCalledWith(device.id, [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], false, false);
+    expect(setDpi).not.toHaveBeenCalled();
+    await waitFor(() => expect(panel.getByText("Attiva", { selector: "strong" })).toBeVisible());
+  });
+
+  it("compila clic, multimedia, disabilitato e default senza DSL o scritture durante la bozza", async () => {
+    const api = createDemoApi(1);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "mouseButton");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Clic per Laterale" }), "273");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale extra" }), "disabled");
+    expect(apply).not.toHaveBeenCalled();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [
+      { buttonId: "button-275", action: { kind: "mouseButton", code: 273 } },
+      { buttonId: "button-276", action: { kind: "disabled" } },
+    ], false, false);
+    await waitFor(() => expect(panel.getByText("Attiva", { selector: "strong" })).toBeVisible());
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "media");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Multimedia per Laterale" }), "164");
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [
+      { buttonId: "button-275", action: { kind: "key", code: 164 } },
+      { buttonId: "button-276", action: { kind: "disabled" } },
+    ], false, false);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "default");
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [{ buttonId: "button-276", action: { kind: "disabled" } }], false, false);
+  });
+
+  it("non consente di perdere tutte le vie al clic sinistro, ma permette di spostarlo", async () => {
+    const api = createDemoApi(1);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Clic sinistro" }), "disabled");
+    expect(panel.getByText(/Mantieni almeno una via al clic sinistro/)).toBeVisible();
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).not.toHaveBeenCalled();
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "mouseButton");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Clic per Laterale" }), "272");
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenCalledWith("demo-viper-1", [
+      { buttonId: "button-272", action: { kind: "disabled" } }, { buttonId: "button-275", action: { kind: "mouseButton", code: 272 } },
+    ], false, false);
+  });
+
+  it("acquisisce una scorciatoia solo nel recorder focalizzato, senza listener keyboard su document/window o IPC", async () => {
+    const api = createDemoApi(1);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    const windowListener = vi.spyOn(window, "addEventListener");
+    const documentListener = vi.spyOn(document, "addEventListener");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "chord");
+    fireEvent.keyDown(window, { key: "c", code: "KeyC", ctrlKey: true });
+    fireEvent.keyDown(document, { key: "c", code: "KeyC", ctrlKey: true });
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
+    const recorder = panel.getByRole("button", { name: "Acquisisci scorciatoia per Laterale" });
+    await user.click(recorder);
+    expect(recorder).toHaveFocus();
+    fireEvent.keyDown(window, { key: "c", code: "KeyC", ctrlKey: true });
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
+    fireEvent.keyDown(recorder, { key: "c", code: "KeyC", ctrlKey: true, repeat: true });
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
+    fireEvent.keyDown(recorder, { key: "c", code: "KeyC", ctrlKey: true });
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("46");
+    expect(panel.getByRole("checkbox", { name: "Ctrl per Laterale" })).toBeChecked();
+    expect(recorder).toHaveAttribute("aria-pressed", "false");
+    expect(apply).not.toHaveBeenCalled();
+    expect(windowListener.mock.calls.filter(([type]) => /^key/.test(type))).toHaveLength(0);
+    expect(documentListener.mock.calls.filter(([type]) => /^key/.test(type))).toHaveLength(0);
+    windowListener.mockRestore();
+    documentListener.mockRestore();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "chord", modifiers: [29], key: 46 } }], false, false);
+  });
+
+  it.each(["Escape", "Tab", "blur", "cancel"])("annulla il recorder con %s senza alterare la bozza o registrare altro", async (cancel) => {
+    const api = createDemoApi(1);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "chord");
+    const recorder = panel.getByRole("button", { name: "Acquisisci scorciatoia per Laterale" });
+    await user.click(recorder);
+    if (cancel === "blur") await user.click(screen.getByRole("textbox", { name: "DPI manuali" }));
+    else if (cancel === "cancel") await user.click(panel.getByRole("button", { name: "Annulla acquisizione per Laterale" }));
+    else fireEvent.keyDown(recorder, { key: cancel, code: cancel });
+    expect(recorder).toHaveAttribute("aria-pressed", "false");
+    fireEvent.keyDown(recorder, { key: "v", code: "KeyV", ctrlKey: true });
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("salva autoApply solo con Applica e Ripristina originali lo disabilita nel readback", async () => {
+    const api = createDemoApi(1);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const restore = vi.spyOn(api, "disableMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "30");
+    const autoApply = panel.getByRole("switch", { name: "Riattiva automaticamente" });
+    await user.click(autoApply);
+    expect(autoApply).toBeChecked();
+    expect(panel.getByText(/Riattivazione automatica salvata: no/)).toBeVisible();
+    expect(apply).not.toHaveBeenCalled();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], true, false);
+    await waitFor(() => expect(panel.getByText(/Riattivazione automatica salvata: si/)).toBeVisible());
+    expect(autoApply).toBeChecked();
+    await user.click(panel.getByRole("button", { name: "Ripristina originali" }));
+    expect(restore).toHaveBeenCalledWith("demo-viper-1");
+    await waitFor(() => expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible());
+    expect(autoApply).not.toBeChecked();
+    expect(panel.getByText(/Riattivazione automatica salvata: no/)).toBeVisible();
+  });
+
+  it("richiede consenso esplicito per autoApply su identita debole e non lo trasferisce a un nuovo fingerprint", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    initial.devices[0].capabilities.remapping!.identityStrength = "port";
+    const { api, emit } = controlledApi(initial);
+    const result = clone(initial);
+    result.revision = 2;
+    result.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "active", enabled: true, autoApply: true, profileId: "weak-profile", bindings: [{ buttonId: "button-275", action: { kind: "key", code: 30 } }] };
+    const apply = vi.spyOn(api, "applyMouseRemapping").mockResolvedValue(result);
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "30");
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
+    await user.click(panel.getByRole("switch", { name: "Riattiva automaticamente" }));
+    const consent = panel.getByRole("checkbox", { name: /Consento la riattivazione automatica/ });
+    expect(consent).not.toBeChecked();
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    await user.click(consent);
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], true, true);
+    const moved = clone(result);
+    moved.revision = 3;
+    moved.devices[0].capabilities.remapping!.fingerprint = "other-port";
+    act(() => emit(moved));
+    const newPanel = within(screen.getByRole("region", { name: /Pulsanti rilevati/ }));
+    expect(newPanel.getByRole("checkbox", { name: /Consento la riattivazione automatica/ })).not.toBeChecked();
+    expect(newPanel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+  });
+
+  it("preserva bozze su stato busy/paused ed errori, senza ottimismo o accoppiamento a DPI invalidi", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    initial.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "active", enabled: true, profileId: "profile", bindings: [{ buttonId: "button-275", action: { kind: "key", code: 30 } }] };
+    const { api, emit } = controlledApi(initial);
+    const apply = vi.spyOn(api, "applyMouseRemapping").mockRejectedValue({ code: "busy", message: "Un altro remapper mantiene il grab.", detail: null });
+    const getSnapshot = vi.spyOn(api, "getSnapshot");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "31");
+    fireEvent.change(screen.getByRole("textbox", { name: "DPI manuali" }), { target: { value: "bad" } });
+    const next = clone(initial);
+    next.revision = 2;
+    next.devices[0].values.remapping!.state = "paused";
+    next.devices[0].values.remapping!.pausedForSafety = true;
+    act(() => emit(next));
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("31");
+    expect(panel.getByText("In pausa", { selector: "strong" })).toBeVisible();
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    next.revision = 3;
+    next.devices[0].values.remapping!.state = "busy";
+    act(() => emit(next));
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await screen.findByRole("alert");
+    expect(apply).toHaveBeenCalledOnce();
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("31");
+    expect(panel.getByText("Occupata", { selector: "strong" })).toBeVisible();
+    expect(panel.getByText("Azione salvata: A")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveValue("bad");
+  });
+
+  it("attende il backend e ignora una risposta remap stale dopo un readback piu recente", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    const { api, emit } = controlledApi(initial);
+    const write = deferred<Snapshot>();
+    const apply = vi.spyOn(api, "applyMouseRemapping").mockReturnValue(write.promise);
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "30");
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(panel.getByRole("button", { name: "Applicazione pulsanti..." })).toBeDisabled();
+    expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible();
+    const latest = clone(initial);
+    latest.revision = 8;
+    latest.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "active", enabled: true, profileId: "new-profile", bindings: [{ buttonId: "button-275", action: { kind: "key", code: 31 } }] };
+    act(() => emit(latest));
+    const older = clone(latest);
+    older.revision = 7;
+    older.devices[0].values.remapping!.bindings[0].action = { kind: "key", code: 30 };
+    await act(async () => { write.resolve(older); await write.promise; });
+    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("31");
+    expect(panel.getByText("Azione salvata: S")).toBeVisible();
+    expect(screen.getByText("LETTURA / 0008")).toBeVisible();
+    expect(apply).toHaveBeenCalledOnce();
+  });
+
+  it("mantiene Ripristina originali disponibile anche se il provider non e piu scrivibile", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    initial.devices[0].capabilities.remapping!.availability = "providerMissing";
+    initial.devices[0].capabilities.remapping!.writable = false;
+    initial.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "paused", enabled: true, autoApply: true, pausedForSafety: true, profileId: "profile", bindings: [{ buttonId: "button-275", action: { kind: "key", code: 30 } }] };
+    const { api } = controlledApi(initial);
+    const result = clone(initial);
+    result.revision = 2;
+    result.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "inactive", enabled: false, autoApply: false, pausedForSafety: false };
+    const restore = vi.spyOn(api, "disableMouseRemapping").mockResolvedValue(result);
+    const { user, panel } = await buttonsView(api);
+    expect(panel.getByRole("combobox", { name: "Azione per Laterale" })).toBeDisabled();
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(panel.getByRole("button", { name: "Ripristina originali" })).toBeEnabled();
+    await user.click(panel.getByRole("button", { name: "Ripristina originali" }));
+    expect(restore).toHaveBeenCalledWith("demo-viper-1");
+    await waitFor(() => expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible());
+    expect(panel.getByRole("switch", { name: "Riattiva automaticamente" })).not.toBeChecked();
+  });
+
+  it("non inventa sorgenti salvate scomparse e blocca Apply finche vengono ripristinati gli originali", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    initial.devices[0].capabilities.remapping!.buttons = initial.devices[0].capabilities.remapping!.buttons.filter((button) => button.code === 272);
+    initial.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "paused", enabled: true, profileId: "profile", bindings: [{ buttonId: "missing-button", action: { kind: "key", code: 30 } }] };
+    const { api } = controlledApi(initial);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { panel } = await buttonsView(api);
+    expect(panel.getAllByRole("combobox", { name: /^Azione per/ })).toHaveLength(1);
+    expect(panel.getByText(/Pulsanti salvati non rilevati: missing-button/)).toBeVisible();
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(panel.getByRole("button", { name: "Ripristina originali" })).toBeEnabled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("dopo Ripristina originali permette una nuova bozza anche se il profilo conserva sorgenti scomparse", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    initial.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "paused", enabled: true, profileId: "profile", bindings: [{ buttonId: "missing-button", action: { kind: "key", code: 30 } }] };
+    const { api } = controlledApi(initial);
+    const restored = clone(initial);
+    restored.revision = 2;
+    restored.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "inactive", enabled: false, autoApply: false, activePreset: null };
+    vi.spyOn(api, "disableMouseRemapping").mockResolvedValue(restored);
+    const apply = vi.spyOn(api, "applyMouseRemapping").mockResolvedValue(restored);
+    const { user, panel } = await buttonsView(api);
+    await user.click(panel.getByRole("button", { name: "Ripristina originali" }));
+    await waitFor(() => expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible());
+    expect(panel.getByText(/Pulsanti salvati non rilevati: missing-button/)).toBeVisible();
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "disabled");
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
+    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "disabled" } }], false, false);
+  });
+
+  it("resetta le bozze dei pulsanti cambiando mouse e annulla localmente senza IPC", async () => {
+    const api = createDemoApi();
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "disabled");
+    await user.click(panel.getByRole("button", { name: "Annulla bozza pulsanti" }));
+    expect(panel.getByRole("combobox", { name: "Azione per Laterale" })).toHaveValue("default");
+    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "disabled");
+    await user.selectOptions(screen.getByLabelText("Mouse selezionato"), "demo-g305-1");
+    const nextPanel = within(screen.getByRole("region", { name: /Pulsanti rilevati/ }));
+    expect(nextPanel.getByRole("combobox", { name: "Azione per Laterale" })).toHaveValue("default");
+    expect(nextPanel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it.each(["unknownIdentity", "unsupportedPlatform", "noButtons", "noCapability"])("resta in sola lettura con %s senza tentare rimappature", async (scenario) => {
+    const initial = await createDemoApi(1).getSnapshot();
+    const capability = initial.devices[0].capabilities.remapping!;
+    if (scenario === "unknownIdentity") capability.fingerprint = null;
+    if (scenario === "unsupportedPlatform") { initial.platform = "unsupportedPlatform"; initial.demo = false; capability.availability = "unsupportedPlatform"; }
+    if (scenario === "noButtons") capability.buttons = [];
+    if (scenario === "noCapability") { initial.devices[0].capabilities.remapping = null; initial.devices[0].values.remapping = null; }
+    const { api } = controlledApi(initial);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { panel } = await buttonsView(api);
+    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(panel.getByRole("switch", { name: "Riattiva automaticamente" })).toBeDisabled();
+    for (const control of panel.queryAllByRole("combobox")) expect(control).toBeDisabled();
+    expect(apply).not.toHaveBeenCalled();
   });
 });
 

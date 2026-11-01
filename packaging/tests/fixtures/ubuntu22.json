@@ -1,0 +1,9 @@
+{
+  "os_release": "ID=ubuntu\nVERSION_ID=\"22.04\"\nVERSION_CODENAME=jammy\n",
+  "facts": {
+    "arch": "x86_64", "init": "systemd", "uid": 1000, "immutable": false,
+    "kernel": "6.8.0-88-generic", "kernel_headers_match": false,
+    "secure_boot": true, "session": true, "groups": ["users"],
+    "pulse_audio": true, "media_session": true, "openrazer_version": "3.3.0-1"
+  }
+}

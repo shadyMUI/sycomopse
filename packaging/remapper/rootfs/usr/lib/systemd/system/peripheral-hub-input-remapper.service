@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Unit]
+Description=Peripheral Hub Private Mouse Remapping Backend
+After=dbus.service systemd-logind.service
+Requires=dbus.service
+Wants=systemd-logind.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=dbus
+BusName=io.peripheralhub.InputRemapper
+ExecStart=/usr/lib/peripheral-hub/remapper-service
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=peripheral-hub-input-remapper
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+KillMode=mixed
+TimeoutStopSec=12
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+DevicePolicy=closed
+DeviceAllow=char-input r
+DeviceAllow=/dev/uinput rw
+PrivateDevices=no
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/peripheral-hub-input-remapper
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

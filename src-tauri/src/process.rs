@@ -7,6 +7,7 @@ use tokio::process::{Child, Command};
 
 const STDOUT_LIMIT: u64 = 16 * 1024 * 1024;
 const STDERR_LIMIT: u64 = 64 * 1024;
+pub const PRIVATE_HEADSETCONTROL: &str = "/usr/lib/peripheral-hub/headsetcontrol";
 
 #[derive(Debug)]
 pub struct ProcessOutput {
@@ -17,7 +18,13 @@ pub struct ProcessOutput {
 fn allowed(executable: &str) -> bool {
     matches!(
         executable,
-        "pw-dump" | "wpctl" | "pipewire" | "headsetcontrol" | "ratbagd" | "systemctl"
+        "pw-dump"
+            | "wpctl"
+            | "pipewire"
+            | "headsetcontrol"
+            | "ratbagd"
+            | "systemctl"
+            | PRIVATE_HEADSETCONTROL
     )
 }
 
@@ -146,6 +153,8 @@ mod tests {
         assert!(!allowed("wpctl --help"));
         assert!(allowed("wpctl"));
         assert!(allowed("systemctl"));
+        assert!(allowed(PRIVATE_HEADSETCONTROL));
+        assert!(!allowed("/usr/lib/peripheral-hub/headsetcontrol --help"));
         assert!(!allowed("systemctl --user start openrazer-daemon"));
         assert_eq!(
             owned_command("powershell").unwrap_err().code,
