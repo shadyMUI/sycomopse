@@ -1393,6 +1393,9 @@ pub async fn run_agent(disable_all: bool) -> AppResult<()> {
             "L'agente deve essere eseguito dall'utente, non da root.",
         ));
     }
+    let installed_binary = std::env::current_exe()
+        .ok()
+        .is_some_and(|path| path.parent() == Some(Path::new("/usr/bin")));
     let paths = agent_paths()?;
     profiles::private_dir(&paths.runtime_dir)?;
     let mut options = OpenOptions::new();
@@ -1425,6 +1428,10 @@ pub async fn run_agent(disable_all: bool) -> AppResult<()> {
             _ = term.recv() => break,
             _ = interrupt.recv() => break,
             _ = tick.tick() => {}
+        }
+        // Native package removal must not leave a resident, endlessly retrying agent.
+        if installed_binary && !Path::new("/usr/bin/peripheral-hub-remapping-agent").is_file() {
+            break;
         }
         match agent_paths() {
             Ok(paths) if paths.config_dir != controller.store.paths.config_dir => {

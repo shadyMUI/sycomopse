@@ -8,34 +8,47 @@ e nel bundle di installazione.
 
 ## Installazione Linux
 
-Usare il **bundle completo della propria distro/versione** prodotto dal workflow
-`Linux Native Packaging`, non il solo pacchetto GUI generato direttamente da
-Tauri. Il bundle contiene un pacchetto nativo DEB, RPM o Arch, installer,
-`manifest.json`, `manifest.sha256`, rootfs verificabile e archivi sorgente.
+Scaricare il **pacchetto nativo della propria distro/versione** prodotto dal
+workflow `Linux Native Packaging`, non il pacchetto GUI generato direttamente
+da Tauri. Il pacchetto include GUI, agente, backend privato Input Remapper,
+CLI HeadsetControl verificato, unita systemd e avvio della sessione utente.
+Non occorre eseguire `install.sh` per l'installazione normale.
+Il bundle di distribuzione contiene anche manifest/checksum, rootfs verificabile,
+archivi sorgente e strumenti opzionali di provisioning/riparazione hardware.
 Questa pipeline carica soltanto artefatti di build: non pubblica release, repo
 o AUR e non genera chiavi di firma.
 
-Dopo aver estratto il bundle, nella sua directory, come utente della sessione
-desktop:
+Installazione normale, scegliendo il file costruito per la propria distro:
 
 ```sh
-sha256sum -c manifest.sha256
-sh install.sh install
+# Ubuntu / Debian: apt risolve le dipendenze del file locale.
+sudo apt install ./peripheral-hub_0.1.0-1_amd64.deb
+# Arch / CachyOS: non usare o convertire un DEB.
+sudo pacman -U ./peripheral-hub-0.1.0-1-x86_64.pkg.tar.zst
+# Fedora oppure openSUSE: usare il rispettivo RPM, non un RPM di un'altra distro.
+sudo dnf install ./peripheral-hub-0.1.0-1.x86_64.rpm
+sudo zypper install ./peripheral-hub-0.1.0-1.x86_64.rpm
 ```
 
-L'installer verifica anche checksum e dimensione di **tutti** i file elencati
+Gli strumenti opzionali del bundle verificano anche checksum e dimensione di **tutti** i file elencati
 prima di chiedere l'autorizzazione. I checksum rilevano corruzione/modifiche,
 non autenticano un archivio proveniente da una fonte sconosciuta. Gli artefatti
 locali non sono automaticamente firmati: eventuali policy native che richiedono
 una firma vengono rispettate, senza `--nogpgcheck`, repository non autenticati
 o modifiche alle policy. Usare solo artefatti di una build fidata.
 
-Il preflight controlla `os-release`, x86_64, systemd come PID 1, versione del
-bundle e provenance dell'immagine. Mostra fonti, pacchetti, servizi ed effetti.
-L'autorizzazione sudo/Polkit e limitata alla transazione esplicita di
-installazione/riparazione/rimozione; GUI e agente non chiedono privilegi e non
-sono eseguiti come root. L'attivazione delle unita utente avviene dopo il ritorno
-all'utente normale, mai tramite `systemctl --user` eseguito da root.
+L'autorizzazione amministrativa e quella del normale gestore pacchetti.
+Gli hook nativi configurano e avviano soltanto il servizio privato dell'app,
+rispettano maschere/policy-rc.d/preset amministrativi e non eseguono apt/pacman
+o altri gestori ricorsivamente. Upgrade non riattiva un servizio disabilitato o
+fermato, anche senza un registro precedente. Dopo remove, la reinstallazione
+ripristina solo abilitazione e avvio effettivamente rimossi dal pacchetto,
+registrati in `/var/lib/peripheral-hub/native-status.json`.
+Un'installazione offline/chroot configura l'avvio al boot e non finge un servizio
+running. L'entry XDG avvia l'agente nella sessione grafica normale; GUI e agente
+non sono root e gli hook non eseguono `systemctl --user` per altri utenti.
+Le modifiche all'autostart XDG, come `Hidden=true`, sono conservate durante
+upgrade/reinstallazione in-place tramite conffile DEB, backup Arch e config RPM.
 
 Dipendenze online risolte con apt, pacman, dnf o zypper e repository autenticati:
 WebKitGTK **4.1**, GTK3/appindicator, Python >=3.10, evdev, psutil, dasbus,
@@ -46,7 +59,14 @@ nessun pip globale, build root dell'app/engine o script remoto eseguito via pipe
 Quando evdev della distro non espone `UInput.input_props`, la build include una
 copia privata 1.9.2 compilata per il Python/ELF del target e la sua fonte BSD.
 
-Gli eventuali repo OpenRazer sono quelli upstream ufficiali: PPA stable su
+Le dipendenze obbligatorie includono WirePlumber e ratbag/UPower, non solo librerie
+GUI. DEB e Arch dichiarano anche i pacchetti OpenRazer disponibili nei repository
+della distro; RPM li raccomanda quando il repository upstream e disponibile.
+`pipewire-pulse` e raccomandato, non viene installato da un hook nascostamente.
+I driver restano dipendenti da kernel, headers, permessi e Secure Boot: un package
+installato non dimostra che ogni dispositivo Razer o stack audio sia gia pronto.
+
+Gli eventuali repo OpenRazer aggiunti tramite il provisioning opzionale sono quelli upstream ufficiali: PPA stable su
 Ubuntu, OBS hardware:razer su Debian/Fedora/openSUSE, pacchetti ufficiali su
 Arch/CachyOS. Le chiavi **pubbliche upstream esistenti** sono controllate per
 fingerprint e le configurazioni aggiunte hanno nomi propri dell'installer.
@@ -70,15 +90,13 @@ Codici d'uscita: `0` operazione pronta/rimozione riuscita, `2` componenti o
 sessione pending, `1` errore. Il report distingue pacchetto installato, servizi
 running, pending e fallimento parziale; non nasconde la necessita di riparazione.
 
-**HeadsetControl:** il parser Rust attuale accetta soltanto `api_version`
-stringa `1.8` o `1.9`, con conteggio e capabilities leggibili coerenti. Versione
-del programma e disponibilita del pacchetto non dimostrano compatibilita.
-L'installer preferisce un CLI di sistema che passa `-b -o json`; un candidato
-privato viene incluso soltanto dopo controllo ELF e lo stesso probe.
-La release congelata 4.2.0 dichiara upstream API 1.6, quindi **non e considerata
-conforme**. In assenza di un CLI verificato il componente rimane non
-configurato. Parser, filtri vendor e supporto hardware non vengono modificati
-dal packaging; non e promessa una lettura batteria per dispositivi non supportati.
+**HeadsetControl:** il parser Rust usa l'API JSON reale `1.6`, verificata sul
+codice/fixture upstream 4.2.0. Conteggio, ID, capability e letture parziali vengono
+validati; il campo inventato `readable_capabilities` non e richiesto. La build
+deve includere un CLI privato conforme e compatibile con l'ELF/Python del target,
+oppure fallisce invece di distribuire un pacchetto incompleto. Il runtime puo
+preferire un CLI di sistema conforme. Nessuna batteria o supporto di un modello
+vengono inventati per il semplice fatto che il programma e installato.
 
 ## Agente E Recovery
 
@@ -158,12 +176,15 @@ del componente privato, quindi genera **realmente** il pacchetto nativo tramite
 dpkg-deb/dpkg-shlibdeps, makepkg o rpmbuild. `readelf`/`ldd`, requisiti nativi e
 import Python sono registrati nel manifest. In un container systemd separato
 verifica installazione, hook di upgrade/reinstallazione della stessa 0.1.0,
-repair di un file proprio cancellato, DBus privato, agente/recovery come utente,
-uninstall e reinstallazione. Nessuna versione Cargo/app viene incrementata
+repair di un file proprio cancellato, autostart modificato, upgrade senza
+registro, DBus privato, agente/recovery come utente e remove/reinstallazione con
+backend attivo, disabilitato o fermato. Nessuna versione Cargo/app viene incrementata
 artificialmente per lo smoke.
 
-Un bundle con `native_smoke=not-run` non viene accettato per installare. Gli
-artefatti vengono caricati dal workflow soltanto dopo lo smoke riuscito.
+Il provisioning opzionale rifiuta un bundle con `native_smoke=not-run`.
+Gli artefatti nativi per gli utenti vengono caricati dal workflow soltanto dopo
+lo smoke riuscito: installazione del solo pacchetto deve avviare il backend,
+senza `install.sh` o comandi manuali di enable/start per il servizio di sistema.
 **In questa sessione Windows non sono state eseguite build ELF/pacchetti Linux,
 transazioni native, VM/login/reboot o prove hardware X11/Wayland.** I target
 restano non certificati fino ai rispettivi risultati Linux; lo smoke container

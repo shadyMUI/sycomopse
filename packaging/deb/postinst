@@ -1,7 +1,12 @@
 #!/bin/sh
 set -eu
-if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload
-fi
-# Service activation belongs to the explicitly authorized installer, not dpkg.
+case "${1:-}" in
+    configure)
+        if [ -n "${2:-}" ]; then
+            python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format deb --upgrade
+        else
+            python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format deb
+        fi
+        ;;
+esac
 exit 0

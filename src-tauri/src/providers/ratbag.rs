@@ -335,11 +335,37 @@ mod linux {
     }
 
     async fn manager() -> AppResult<Bus> {
-        let bus = Bus::active(SERVICE, false).await.map_err(|error| {
-            if error.code == ErrorCode::ProviderMissing {
-                AppError::new(ErrorCode::ProviderMissing, "ratbagd non attivo. L'app non lo avvia: il probe del daemon puo cambiare la modalita onboard; avvio manuale con consenso.")
-            } else { error }
-        })?;
+        let first = Bus::active(SERVICE, false).await;
+        let bus = if first
+            .as_ref()
+            .is_err_and(|error| error.code == ErrorCode::ProviderMissing)
+            && native_package_configured()
+        {
+            // The native package installs the daemon and its existing DBus policy.
+            // Request normal bus activation, never a root systemctl/sudo command.
+            let startup = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let connection = zbus::Connection::system().await?;
+                let proxy = zbus::Proxy::new(
+                    &connection,
+                    "org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                )
+                .await?;
+                proxy
+                    .call::<_, _, u32>("StartServiceByName", &(SERVICE, 0u32))
+                    .await
+            })
+            .await;
+            Bus::active(SERVICE, false).await.map_err(|error| {
+                AppError::new(error.code, "ratbagd non disponibile dopo l'attivazione DBus; verificare il pacchetto nativo e la policy del daemon.")
+                    .detail(format!("Avvio: {startup:?}; {}", error.message))
+            })?
+        } else {
+            first.map_err(|error| if error.code == ErrorCode::ProviderMissing {
+                AppError::new(error.code, "ratbagd non attivo. Installare il pacchetto nativo completo o avviare il daemon con consenso al probe onboard.")
+            } else { error })?
+        };
         let api = bus.introspect(ROOT).await?;
         if !api.property(MANAGER_INTERFACE, "APIVersion", "i", false)
             || !api.property(MANAGER_INTERFACE, "Devices", "ao", false)
@@ -349,6 +375,18 @@ mod linux {
         let version: i32 = bus.get(ROOT, MANAGER_INTERFACE, "APIVersion").await?;
         validate_api_version(version)?;
         Ok(bus)
+    }
+
+    fn native_package_configured() -> bool {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata("/var/lib/peripheral-hub/native-status.json").is_ok_and(
+            |metadata| {
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.uid() == 0
+                    && metadata.mode() & 0o022 == 0
+            },
+        )
     }
 
     async fn device_paths(bus: &Bus) -> AppResult<Vec<String>> {

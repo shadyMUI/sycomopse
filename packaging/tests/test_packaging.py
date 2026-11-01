@@ -7,6 +7,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ import sources
 import staging
 import system
 from build import app_version, write_manifest
+from ci import smoke
 from ci.toolchain import extract_node
 
 
@@ -313,6 +315,20 @@ class IntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(common.PackagingError, "different"):
                 install.preflight(target, facts, manifest)
 
+    def test_smoke_service_state_gate_rejects_missing_units_and_state_mismatches(self):
+        for enabled, active in ((False, False), (True, False), (True, True)):
+            expected = [SimpleNamespace(stdout="enabled\n" if enabled else "disabled\n", returncode=0 if enabled else 1),
+                        SimpleNamespace(stdout="active\n" if active else "inactive\n", returncode=0 if active else 3)]
+            with self.subTest(enabled=enabled, active=active), patch.object(smoke, "run", side_effect=expected):
+                smoke.verify_service_state(enabled, active, "fixture")
+            with self.subTest(mismatch=enabled), patch.object(smoke, "run", side_effect=expected), self.assertRaises(common.PackagingError):
+                smoke.verify_service_state(not enabled, active, "fixture")
+            with self.subTest(mismatch=active), patch.object(smoke, "run", side_effect=expected), self.assertRaises(common.PackagingError):
+                smoke.verify_service_state(enabled, not active, "fixture")
+        missing = [SimpleNamespace(stdout="not-found\n", returncode=1), SimpleNamespace(stdout="unknown\n", returncode=4)]
+        with patch.object(smoke, "run", side_effect=missing), self.assertRaises(common.PackagingError):
+            smoke.verify_service_state(False, False, "fixture")
+
     def test_atomic_status_update_can_repair_a_previous_failed_write(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "state.json"
@@ -374,31 +390,127 @@ class IntegrityTests(unittest.TestCase):
         self.assertIn("ExecStart=/usr/bin/peripheral-hub-remapping-agent\n", unit)
         self.assertIn("Exec=/usr/bin/peripheral-hub-remapping-agent --disable-all", desktop)
         self.assertNotIn("sudo", unit + desktop)
-        self.assertFalse((PACKAGING / "rootfs/etc").exists())
+        autostart = (PACKAGING / "rootfs/etc/xdg/autostart/io.peripheralhub.RemappingAgent.desktop").read_text()
+        self.assertIn("Exec=systemctl --user start peripheral-hub-remapping-agent.service", autostart)
+        self.assertNotIn("sudo", autostart)
+
+    def test_arch_autostart_is_in_staged_payload_and_has_native_backup_metadata(self):
+        relative = "etc/xdg/autostart/io.peripheralhub.RemappingAgent.desktop"
+        recipe = (PACKAGING / "arch/PKGBUILD").read_text()
+        self.assertIn("backup=('" + relative + "')", recipe)
+        self.assertNotIn("backup=('/", recipe)
+        self.assertIn('cp -a "$srcdir/etc" "$pkgdir/etc"', recipe)
+        self.assertIn(relative, staging.REQUIRED)
+        with tempfile.TemporaryDirectory() as directory:
+            root, archive = Path(directory) / "rootfs", Path(directory) / "rootfs.tar.gz"
+            staging.merge_rootfs(PACKAGING / "rootfs", root)
+            staging.rootfs_archive(root, archive, 0)
+            with tarfile.open(archive, "r:gz") as payload:
+                self.assertEqual(payload.extractfile(relative).read(), (PACKAGING / "rootfs" / relative).read_bytes())
+
+
+class HeadsetStagingTests(unittest.TestCase):
+    def stage_candidate(self, directory, mode, verified=None, license_name="license"):
+        root = Path(directory)
+        rootfs, work, artifacts = root / "rootfs", root / "work", root / "artifacts"
+        (rootfs / "usr/lib/peripheral-hub").mkdir(parents=True)
+        work.mkdir()
+        artifacts.mkdir()
+        entries = [("HeadsetControl-4.2.0/src/main.c", "file")]
+        if license_name:
+            entries.append(("HeadsetControl-4.2.0/" + license_name, "file"))
+        source = source_tar(entries)
+        zipped = io.BytesIO()
+        with zipfile.ZipFile(zipped, "w") as archive:
+            archive.writestr("headsetcontrol", b"private CLI")
+        binary = work / "headsetcontrol-build/headsetcontrol"
+
+        def command(argv, **kwargs):
+            if argv[:2] == ["cmake", "--build"]:
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_bytes(b"private CLI")
+            return SimpleNamespace(stdout="private udev rules\n", stderr="", returncode=0)
+
+        verified = verified if verified is not None else {"configured": True, "reason": "CLI schema 1.6 verified"}
+        with patch.object(sources, "require_build_user"), \
+                patch.object(sources, "fetch_locked", side_effect=[source, zipped.getvalue()]), \
+                patch.object(sources, "run", side_effect=command), \
+                patch.object(staging, "elf_report"), \
+                patch.object(sources, "probe_headset", return_value=verified), \
+                patch.object(sources.shutil, "copyfile", wraps=sources.shutil.copyfile) as copied:
+            result = sources.headset_candidate(rootfs, {"headset_build": mode}, work, artifacts, root / "cache")
+        return result, rootfs, source, copied.call_args_list
+
+    def test_private_candidate_stages_exact_upstream_lowercase_license_for_both_build_paths(self):
+        for mode in ("source", "prebuilt"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                result, rootfs, source, copied = self.stage_candidate(directory, mode)
+                self.assertTrue(result["configured"])
+                self.assertTrue(result["private"])
+                self.assertEqual(result["version"], "4.2.0")
+                self.assertEqual(result["selection"], "private")
+                self.assertEqual((rootfs / "usr/lib/peripheral-hub/headsetcontrol").read_bytes(), b"private CLI")
+                docs = rootfs / "usr/share/doc/peripheral-hub/headsetcontrol"
+                self.assertEqual((docs / "LICENSE").read_bytes(), b"abc")
+                self.assertEqual((docs / result["source"]).read_bytes(), source)
+                self.assertEqual((rootfs / "usr/lib/udev/rules.d/70-peripheral-hub-headsets.rules").read_text(), "private udev rules\n")
+                license_copies = [call.args for call in copied if Path(call.args[1]).name == "LICENSE"]
+                self.assertEqual(len(license_copies), 1)
+                # Path equality is case-insensitive on Windows; inspect the original name.
+                self.assertEqual(Path(license_copies[0][0]).name, "license")
+
+    def test_missing_license_is_a_staging_error_not_complete_success(self):
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(OSError):
+            self.stage_candidate(directory, "prebuilt", license_name=None)
+
+    def test_unconfigured_candidate_diagnostic_uses_verified_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result, rootfs, _, _ = self.stage_candidate(directory, "prebuilt", {"configured": False})
+            self.assertFalse(result["private"])
+            self.assertIn("API 1.6", result["reason"])
+            self.assertNotIn("1.8/1.9", result["reason"])
+            self.assertNotIn("path", result)
+            self.assertFalse((rootfs / "usr/lib/peripheral-hub/headsetcontrol").exists())
 
 
 class ContractTests(unittest.TestCase):
-    def test_headset_only_real_baseline_api_strings(self):
-        for api in ("1.8", "1.9"):
+    def test_headset_only_verified_upstream_api_strings(self):
+        for api in ("1.6",):
             self.assertTrue(common.headset_contract(json.dumps({"api_version": api, "devices": [], "device_count": 0}).encode())[0])
-        for api in ("1.6", "3.0", 1.8, 3, None):
+        for api in ("1.8", "1.9", "3.0", 1.6, 3, None):
             self.assertFalse(common.headset_contract(json.dumps({"api_version": api, "devices": []}).encode())[0])
 
-    def test_headset_readable_capabilities_are_required_for_nonempty_records(self):
-        value = {"api_version": "1.9", "devices": [{"id_vendor": "0x1532", "id_product": "0x1234", "capabilities": ["CAP_BATTERY_STATUS"]}]}
+    def test_headset_official_capabilities_without_invented_readable_array(self):
+        value = {"api_version": "1.6", "device_count": 1, "devices": [{"id_vendor": "0x046d", "id_product": "0x0a66"}]}
         self.assertFalse(common.headset_contract(json.dumps(value).encode())[0])
-        value["devices"][0]["readable_capabilities"] = ["CAP_BATTERY_STATUS"]
+        value["devices"][0]["capabilities"] = ["CAP_BATTERY_STATUS"]
         self.assertTrue(common.headset_contract(json.dumps(value).encode())[0])
 
     def test_headset_count_and_provider_limits_match_rust(self):
         self.assertFalse(common.headset_contract(b" " * (256 * 1024 + 1))[0])
-        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.9", "devices": [], "device_count": 1}).encode())[0])
-        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.9", "devices": [None] * 257}).encode())[0])
+        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.6", "devices": [], "device_count": 1}).encode())[0])
+        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.6", "devices": []}).encode())[0])
+        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.6", "devices": [None] * 257, "device_count": 257}).encode())[0])
+
+    def test_headset_upstream_empty_inventory_exit_one_verifies_software_only(self):
+        def empty_inventory(argv, **kwargs):
+            kwargs["stdout"].write(b'{"api_version":"1.6","device_count":0,"devices":[]}')
+            return SimpleNamespace(returncode=1)
+        with patch.object(common.subprocess, "run", side_effect=empty_inventory):
+            result = common.probe_headset("/private/headsetcontrol")
+        self.assertTrue(result["configured"])
+
+    def test_headset_arbitrary_error_is_not_an_empty_inventory_success(self):
+        def failed(argv, **kwargs):
+            kwargs["stdout"].write(b'{"api_version":"1.6","device_count":0,"devices":[]}')
+            return SimpleNamespace(returncode=2)
+        with patch.object(common.subprocess, "run", side_effect=failed):
+            self.assertFalse(common.probe_headset("/private/headsetcontrol")["configured"])
 
     def test_headset_candidate_lock_does_not_claim_conformity(self):
         lock = common.json_file(PACKAGING / "headsetcontrol.lock.json")
         self.assertTrue(lock["candidate_only"])
-        self.assertEqual(lock["accepted_api_versions"], ["1.8", "1.9"])
+        self.assertEqual(lock["accepted_api_versions"], ["1.6"])
         self.assertEqual(lock["commit"], "91ee690a5e302a10a6f4f75a46be05846a38a3b0")
 
     def test_pinned_evdev_private_is_source_only_not_global_pip(self):

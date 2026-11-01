@@ -7,13 +7,15 @@ URL:            https://github.com/shadyMUI/sycomopse
 Source0:        rootfs.tar.gz
 BuildArch:      x86_64
 AutoReqProv:    yes
+Recommends:     openrazer-meta
+Recommends:     pipewire-pulseaudio
 %include %{ph_requires}
 
 %description
 The Tauri app, a non-graphical user agent and a separate private GPL Input
 Remapper engine. This package does not replace stock Input Remapper services,
-audio configuration, OpenRazer or ratbag configuration. The online installer
-resolves and explicitly activates the distribution backends.
+audio configuration, OpenRazer or ratbag configuration. Native package hooks
+activate its private backend; the graphical session starts the user agent.
 
 %prep
 %setup -q -c -T
@@ -22,15 +24,20 @@ tar -xzf %{SOURCE0}
 %install
 mkdir -p %{buildroot}
 cp -a usr %{buildroot}/usr
+if [ -d etc ]; then
+    cp -a etc %{buildroot}/etc
+fi
 
 %post
-if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload
+if [ "$1" -eq 1 ]; then
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format rpm
+else
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format rpm --upgrade
 fi
 
 %preun
-if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
-    systemctl stop peripheral-hub-input-remapper.service || :
+if [ "$1" -eq 0 ]; then
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py remove --format rpm
 fi
 
 %postun

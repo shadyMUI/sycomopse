@@ -89,11 +89,8 @@ def evdev_private(rootfs, work, artifacts, cache):
 
 def headset_candidate(rootfs, target, work, artifacts, cache):
     require_build_user()
-    system = shutil.which("headsetcontrol")
-    if system:
-        verified = probe_headset(system)
-        if verified["configured"]:
-            return {**verified, "selection": "system", "private": False}
+    # A build-host CLI is not guaranteed to exist on a fresh installation.
+    # Always stage the audited, pinned private CLI in distributed packages.
     lock = json_file(HERE / "headsetcontrol.lock.json")
     data = fetch_locked(lock["source"], cache, f"headsetcontrol-{lock['version']}-source.tar.gz")
     source = extract_source(data, Path(work) / "headsetcontrol-source")
@@ -130,13 +127,13 @@ def headset_candidate(rootfs, target, work, artifacts, cache):
             udev.write_text(rules, encoding="utf-8")
             docs = Path(rootfs) / "usr/share/doc/peripheral-hub/headsetcontrol"
             docs.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source / "LICENSE", docs / "LICENSE")
+            shutil.copyfile(source / "license", docs / "LICENSE")
             shutil.copyfile(archive, docs / archive.name)
             result.update(private=True, selection="private", path="/usr/lib/peripheral-hub/headsetcontrol")
     except PackagingError as error:
         result["reason"] = f"Pinned candidate is not target-compatible: {error}"
     if not result["configured"]:
-        result["reason"] = "HeadsetControl component not configured: " + result.get("reason", "No candidate passes unchanged Rust API 1.8/1.9")
+        result["reason"] = "HeadsetControl component not configured: " + result.get("reason", "No candidate passes verified Rust API 1.6")
         result.pop("path", None)
     return result
 

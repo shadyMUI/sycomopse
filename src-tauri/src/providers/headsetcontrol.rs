@@ -2,6 +2,13 @@ use crate::models::{AppResult, AvailabilityCode, Battery, Diagnostic, ProviderKi
 use crate::providers::{bounded_text, hex_id, invalid_data, MAX_DEVICES, MAX_PROVIDER_BYTES};
 use serde_json::Value;
 
+// Verified against Sapd/HeadsetControl 4.2.0, cli/output/output{.cpp,_data.hpp}.
+const VERIFIED_API_VERSION: &str = "1.6";
+
+fn supported_vendor(vendor_id: u16) -> bool {
+    matches!(vendor_id, 0x1532 | 0x046d)
+}
+
 #[derive(Debug, Clone)]
 pub struct Reading {
     pub vendor_id: u16,
@@ -33,7 +40,8 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
         .and_then(Value::as_str)
         .filter(|s| s.len() <= 32)
         .map(str::to_owned);
-    let supported_api = matches!(api_version.as_deref(), Some("1.8" | "1.9"));
+    let supported_api = api_version.as_deref() == Some(VERIFIED_API_VERSION)
+        && root.get("name").and_then(Value::as_str) == Some("HeadsetControl");
     let devices = root
         .get("devices")
         .and_then(Value::as_array)
@@ -44,14 +52,25 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
     let count_matches = root
         .get("device_count")
         .and_then(Value::as_u64)
-        .is_none_or(|count| count == devices.len() as u64);
+        .is_some_and(|count| count == devices.len() as u64);
+    // An unidentified record could be a second instance of any reported model.
+    let complete_ids = devices.iter().all(|device| {
+        ["id_vendor", "id_product"].iter().all(|key| {
+            device
+                .get(*key)
+                .and_then(Value::as_str)
+                .and_then(hex_id)
+                .is_some()
+        })
+    });
+    let verified_api = supported_api && count_matches && complete_ids;
     let mut report = Report {
         api_version,
         ..Report::default()
     };
-    if !supported_api || !count_matches {
+    if !verified_api {
         report.diagnostics.push(Diagnostic::new("headsetcontrol-api", ProviderKind::Headsetcontrol, AvailabilityCode::Unknown, Severity::Warning,
-            "API HeadsetControl non verificata o conteggio incoerente: batteria lasciata non disponibile."));
+            "API HeadsetControl non verificata o output incompleto/incoerente: batteria lasciata non disponibile."));
     }
     for (index, device) in devices.iter().enumerate() {
         let Some(device) = device.as_object() else {
@@ -72,41 +91,71 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
             .get("id_product")
             .and_then(Value::as_str)
             .and_then(hex_id);
-        let (Some(0x1532), Some(product_id)) = (vendor_id, product_id) else {
+        let (Some(vendor_id), Some(product_id)) = (vendor_id, product_id) else {
             continue;
         };
-        let readable = device
-            .get("readable_capabilities")
-            .and_then(Value::as_array);
         let advertised = device.get("capabilities").and_then(Value::as_array);
-        let has_battery = |caps: Option<&Vec<Value>>| {
-            caps.is_some_and(|caps| {
-                caps.len() <= 128
-                    && caps.iter().all(Value::is_string)
-                    && caps
-                        .iter()
-                        .any(|cap| cap.as_str() == Some("CAP_BATTERY_STATUS"))
-            })
-        };
-        let readable_battery =
-            supported_api && count_matches && has_battery(readable) && has_battery(advertised);
-        let success = device.get("status").and_then(Value::as_str) == Some("success");
-        let no_errors = device.get("errors").is_none_or(|errors| match errors {
-            Value::Object(errors) => errors.is_empty(),
-            Value::Array(errors) => errors.is_empty(),
-            Value::Null => true,
-            _ => false,
+        let valid_capabilities =
+            advertised.is_some_and(|caps| caps.len() <= 128 && caps.iter().all(Value::is_string));
+        let device_status = device.get("status").and_then(Value::as_str);
+        let valid_errors = device.get("errors").is_none_or(|errors| {
+            errors
+                .as_object()
+                .is_some_and(|errors| errors.values().all(Value::is_string))
         });
+        let no_errors = device
+            .get("errors")
+            .is_none_or(|errors| errors.as_object().is_some_and(|errors| errors.is_empty()));
         let battery = device.get("battery").and_then(Value::as_object);
         let status = battery
             .and_then(|b| b.get("status"))
             .and_then(Value::as_str);
-        let valid_status = matches!(status, Some("BATTERY_AVAILABLE" | "BATTERY_CHARGING"));
-        let level = battery
-            .and_then(|b| b.get("level"))
-            .and_then(Value::as_i64)
-            .filter(|level| (0..=100).contains(level));
-        let available = readable_battery && success && no_errors && valid_status;
+        let raw_level = battery.and_then(|b| b.get("level")).and_then(Value::as_i64);
+        let valid_record = device.get("device").is_some_and(Value::is_string)
+            && valid_capabilities
+            && matches!(
+                device_status,
+                Some("success" | "partial" | "failure" | "unknown")
+            )
+            && valid_errors
+            && (device.get("battery").is_none()
+                || (matches!(
+                    status,
+                    Some(
+                        "BATTERY_AVAILABLE"
+                            | "BATTERY_CHARGING"
+                            | "BATTERY_UNAVAILABLE"
+                            | "BATTERY_ERROR"
+                            | "BATTERY_TIMEOUT"
+                            | "UNKNOWN"
+                    )
+                ) && raw_level.is_some_and(|level| (-1..=100).contains(&level))
+                    && (status != Some("BATTERY_AVAILABLE")
+                        || raw_level.is_some_and(|level| (0..=100).contains(&level)))));
+        if !valid_record {
+            report.diagnostics.push(Diagnostic::new(
+                format!("headsetcontrol-record-{index}"),
+                ProviderKind::Headsetcontrol,
+                AvailabilityCode::Unknown,
+                Severity::Warning,
+                "Record cuffie HeadsetControl non conforme al formato verificato.",
+            ));
+        }
+        if !supported_vendor(vendor_id) {
+            continue;
+        }
+        // API 1.6 defines CAP_BATTERY_STATUS as a query; there is no readable_capabilities field.
+        let readable_battery = verified_api
+            && valid_record
+            && advertised.is_some_and(|caps| {
+                caps.iter()
+                    .any(|cap| cap.as_str() == Some("CAP_BATTERY_STATUS"))
+            });
+        let level = raw_level.filter(|level| (0..=100).contains(level));
+        let valid_status = status == Some("BATTERY_CHARGING")
+            || (status == Some("BATTERY_AVAILABLE") && level.is_some());
+        let available =
+            readable_battery && device_status == Some("success") && no_errors && valid_status;
         let percentage = if available {
             level.map(|value| value as f64)
         } else {
@@ -125,7 +174,7 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
             device
                 .get("device")
                 .and_then(Value::as_str)
-                .unwrap_or("Cuffie Logitech"),
+                .unwrap_or("Cuffie USB"),
         );
         if !available || percentage.is_none() {
             report.diagnostics.push(Diagnostic::new(
@@ -137,7 +186,7 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
             ));
         }
         report.devices.push(Reading {
-            vendor_id: 0x046d,
+            vendor_id,
             product_id,
             name,
             readable_battery,
@@ -155,6 +204,16 @@ pub fn parse_json(bytes: &[u8], observed_at: u64) -> AppResult<Report> {
     Ok(report)
 }
 
+pub fn conforms(output: &crate::process::ProcessOutput) -> bool {
+    output.stderr.trim().is_empty()
+        && parse_json(&output.stdout, 0).is_ok_and(|report| {
+            report.api_version.as_deref() == Some(VERIFIED_API_VERSION)
+                && !report.diagnostics.iter().any(|item| {
+                    item.id == "headsetcontrol-api" || item.id.starts_with("headsetcontrol-record-")
+                })
+        })
+}
+
 #[cfg(target_os = "linux")]
 async fn probe() -> AppResult<crate::process::ProcessOutput> {
     use std::os::unix::fs::MetadataExt;
@@ -165,16 +224,6 @@ async fn probe() -> AppResult<crate::process::ProcessOutput> {
         Duration::from_secs(5),
     )
     .await;
-    let conforms = |output: &crate::process::ProcessOutput| {
-        output.stderr.trim().is_empty()
-            && parse_json(&output.stdout, 0).is_ok_and(|report| {
-                matches!(report.api_version.as_deref(), Some("1.8" | "1.9"))
-                    && !report
-                        .diagnostics
-                        .iter()
-                        .any(|item| item.id == "headsetcontrol-api")
-            })
-    };
     if system.as_ref().is_ok_and(conforms) {
         return system;
     }
@@ -208,7 +257,11 @@ async fn probe() -> AppResult<crate::process::ProcessOutput> {
 pub fn usb_fingerprint(usb: &[crate::devices::UsbMetadata]) -> String {
     let mut usb: Vec<_> = usb
         .iter()
-        .filter(|device| device.identity.vendor_id == Some(0x046d) && device.is_audio)
+        .filter(|device| {
+            device.identity.vendor_id.is_some_and(supported_vendor)
+                && device.identity.product_id.is_some()
+                && device.is_audio
+        })
         .collect();
     usb.sort_by(|a, b| a.instance.cmp(&b.instance));
     serde_json::to_string(

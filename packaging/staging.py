@@ -21,6 +21,9 @@ REQUIRED = (
     "usr/lib/systemd/system/peripheral-hub-input-remapper.service",
     "usr/share/dbus-1/system.d/io.peripheralhub.InputRemapper.conf",
     "usr/share/doc/peripheral-hub/remapper/LICENSE.input-remapper",
+    "usr/lib/peripheral-hub/installer/native.py",
+    "usr/lib/systemd/system-preset/90-peripheral-hub.preset",
+    "etc/xdg/autostart/io.peripheralhub.RemappingAgent.desktop",
 )
 
 

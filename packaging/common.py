@@ -301,12 +301,12 @@ def headset_contract(output):
         value = json.loads(output)
     except (ValueError, UnicodeError):
         return False, "CLI did not emit JSON"
-    if not isinstance(value, dict) or value.get("api_version") not in ("1.8", "1.9"):
-        return False, "Rust baseline requires api_version string 1.8 or 1.9"
+    if not isinstance(value, dict) or value.get("api_version") != "1.6":
+        return False, "Verified HeadsetControl JSON API 1.6 is required"
     devices = value.get("devices")
     if not isinstance(devices, list) or len(devices) > 256:
         return False, "Invalid devices inventory"
-    if "device_count" in value and (type(value["device_count"]) is not int or value["device_count"] != len(devices)):
+    if type(value.get("device_count")) is not int or value["device_count"] != len(devices):
         return False, "Inconsistent device_count"
     for device in devices:
         if not isinstance(device, dict):
@@ -314,10 +314,10 @@ def headset_contract(output):
         for key in ("id_vendor", "id_product"):
             if not isinstance(device.get(key), str) or not re.fullmatch(r"(?:0x)?[0-9a-fA-F]{4}", device[key]):
                 return False, f"Invalid {key}"
-        for key in ("capabilities", "readable_capabilities"):
+        for key in ("capabilities",):
             caps = device.get(key)
             if not isinstance(caps, list) or len(caps) > 128 or not all(isinstance(cap, str) for cap in caps):
-                return False, f"Missing/invalid {key} required for battery readback"
+                return False, f"Missing/invalid {key} in the verified JSON schema"
     return True, f"CLI schema {value['api_version']} verified; hardware support is unchanged"
 
 
@@ -341,7 +341,10 @@ def probe_headset(executable):
     except (OSError, subprocess.TimeoutExpired) as error:
         return {"configured": False, "path": str(executable), "reason": str(error)}
     good, reason = headset_contract(output)
-    if result.returncode or errors.strip():
+    # Upstream 4.2.0 outputs a valid empty inventory and exits 1 when no headset
+    # is attached. That verifies the software contract, not a battery reading.
+    no_devices = good and json.loads(output).get("device_count") == 0
+    if (result.returncode != 0 and not (result.returncode == 1 and no_devices)) or errors.strip():
         good, reason = False, "CLI probe failed or reported stderr; no confirmed battery samples"
     return {"configured": good, "path": str(executable), "reason": reason}
 

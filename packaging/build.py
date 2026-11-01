@@ -33,7 +33,13 @@ def app_version(repo=REPO):
 
 
 def native_requirements(target):
-    resolved, missing = resolve_packages(target, target["runtime"] + target["headset"])
+    requirements = target["runtime"] + target["headset"] + target.get("audio", []) + target.get("ratbag", [])
+    # RPM OpenRazer requires an additional upstream repository; it is not a core dependency.
+    if target["manager"] in ("apt", "pacman"):
+        requirements += target.get("razer", [])
+    if target["format"] == "deb":
+        requirements += ["init-system-helpers"]
+    resolved, missing = resolve_packages(target, requirements)
     if missing:
         raise PackagingError("Runtime dependencies unavailable in native metadata: " + ", ".join(missing))
     requirements = []
@@ -58,14 +64,15 @@ def package_deb(rootfs, reports, dependencies, work, destination, version):
     (control / "control").write_text(
         f"Package: {APP}\nVersion: {version}-1\nArchitecture: amd64\nSection: utils\nPriority: optional\n"
         f"Maintainer: Peripheral Hub contributors <shadyMUI@users.noreply.github.com>\nInstalled-Size: {size}\n"
-        f"Depends: {', '.join(depends)}\nHomepage: https://github.com/shadyMUI/sycomopse\n"
+        f"Depends: {', '.join(depends)}\nRecommends: pipewire-pulse\nHomepage: https://github.com/shadyMUI/sycomopse\n"
         "Description: Peripheral Hub GUI, user agent and private Input Remapper engine\n"
-        " Online installer configures distro backends with explicit authorization.\n"
+        " Native hooks activate the private backend; the desktop session starts the user agent.\n"
         " Separate GPL engine sources and licenses are included.\n", encoding="utf-8",
     )
     for name in ("postinst", "prerm", "postrm"):
         shutil.copyfile(HERE / "deb" / name, control / name)
         (control / name).chmod(0o755)
+    (control / "conffiles").write_text("/etc/xdg/autostart/io.peripheralhub.RemappingAgent.desktop\n", encoding="utf-8")
     destination = Path(destination) / f"{APP}_{version}-1_amd64.deb"
     run(["dpkg-deb", "--root-owner-group", "--build", str(rootfs), str(destination)], capture=False, timeout=300)
     shutil.rmtree(control)
@@ -112,7 +119,7 @@ def package_rpm(rootfs_tar, rootfs, dependencies, work, destination, version):
         name = "/" + path.relative_to(rootfs).as_posix()
         if '"' in name or "%" in name or "\n" in name:
             raise PackagingError("Unsupported RPM payload path")
-        files.append('"' + name + '"')
+        files.append(('%config(noreplace) ' if name.startswith("/etc/") else '') + '"' + name + '"')
     # Private directories must be owned by this package as well as their files.
     for path in sorted(Path(rootfs).rglob("*")):
         if path.is_dir() and path.relative_to(rootfs).as_posix().startswith(("usr/lib/peripheral-hub", "usr/share/doc/peripheral-hub")):
@@ -205,11 +212,13 @@ def build(args):
         shutil.copyfile(artifacts / "input-remapper-2.2.1-corresponding-source.tar.gz", rootfs / "usr/share/doc/peripheral-hub/remapper/input-remapper-2.2.1-corresponding-source.tar.gz")
         private_evdev = evdev_private(rootfs, work, artifacts, cache)
         headset = headset_candidate(rootfs, target, work, artifacts, cache)
+        if not headset.get("configured") or not headset.get("private"):
+            raise PackagingError("Native package requires a staged HeadsetControl CLI with verified JSON API 1.6: " + headset.get("reason", "probe failed"))
         docs = rootfs / "usr/share/doc/peripheral-hub"
         shutil.copyfile(REPO / "LICENSE", docs / "LICENSE.app")
         installer = rootfs / "usr/lib/peripheral-hub/installer"
         installer.mkdir(parents=True)
-        for name in ("install.py", "system.py", "common.py", "targets.json"):
+        for name in ("install.py", "system.py", "common.py", "native.py", "targets.json"):
             shutil.copyfile(HERE / name, installer / name)
             shutil.copyfile(HERE / name, bundle / name)
         launcher = bundle / "install.sh"
@@ -225,8 +234,11 @@ def build(args):
             minor = private_evdev["python_minor"]
             if target["format"] == "deb":
                 dependencies.append(f"python{minor}")
-            else:
+            elif target["format"] == "rpm":
                 dependencies.append(f"python(abi) = {minor}")
+            else:
+                major, feature = (int(part) for part in minor.split("."))
+                dependencies.extend([f"python>={minor}", f"python<{major}.{feature + 1}"])
         archive = work / "rootfs.tar.gz"
         rootfs_archive(rootfs, archive, epoch)
         if target["format"] == "deb":

@@ -2,7 +2,7 @@
   "schema": 1,
   "version": "4.2.0",
   "commit": "91ee690a5e302a10a6f4f75a46be05846a38a3b0",
-  "accepted_api_versions": ["1.8", "1.9"],
+  "accepted_api_versions": ["1.6"],
   "candidate_only": true,
   "license": "GPL-3.0-or-later",
   "source": {

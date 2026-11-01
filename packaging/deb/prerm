@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-    systemctl stop peripheral-hub-input-remapper.service || true
+if [ "${1:-}" = remove ]; then
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py remove --format deb
 fi
 exit 0

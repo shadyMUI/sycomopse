@@ -1,19 +1,17 @@
 post_install() {
-    if [ -d /run/systemd/system ]; then
-        systemctl daemon-reload
-    fi
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format arch
 }
 
 post_upgrade() {
-    post_install
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format arch --upgrade
 }
 
 pre_remove() {
-    if [ -d /run/systemd/system ]; then
-        systemctl stop peripheral-hub-input-remapper.service || true
-    fi
+    python3 -I -B /usr/lib/peripheral-hub/installer/native.py remove --format arch
 }
 
 post_remove() {
-    post_install
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+    fi
 }

@@ -8,6 +8,7 @@ arch=('x86_64')
 url='https://github.com/shadyMUI/sycomopse'
 license=('MIT' 'GPL-3.0-or-later' 'BSD-3-Clause')
 install=peripheral-hub.install
+backup=('etc/xdg/autostart/io.peripheralhub.RemappingAgent.desktop')
 source=('rootfs.tar.gz' 'native-depends')
 sha256sums=("${PH_ROOTFS_SHA256:?}" "${PH_DEPENDS_SHA256:?}")
 options=('!strip' '!debug')
@@ -15,4 +16,7 @@ mapfile -t depends < "$startdir/native-depends"
 
 package() {
     cp -a "$srcdir/usr" "$pkgdir/usr"
+    if [ -d "$srcdir/etc" ]; then
+        cp -a "$srcdir/etc" "$pkgdir/etc"
+    fi
 }

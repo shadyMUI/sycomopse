@@ -4,6 +4,7 @@ use peripheral_hub_lib::{
     providers::{self, headsetcontrol, openrazer, ratbag, upower},
 };
 use serde::Deserialize;
+use serde_json::{json, Value};
 
 #[test]
 fn usb_association_does_not_choose_first_duplicate_serial_and_verified_wired_hid_merges() {
@@ -65,7 +66,7 @@ fn anonymous_battery_cache_key_changes_on_usb_generation_and_not_enumeration_ord
         "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2",
         None,
         0x046d,
-        0x0aff,
+        0x0a66,
         true,
     );
     let mut changed = first.clone();
@@ -78,7 +79,7 @@ fn anonymous_battery_cache_key_changes_on_usb_generation_and_not_enumeration_ord
         "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-3",
         None,
         0x046d,
-        0x0aff,
+        0x0a66,
         true,
     );
     assert_eq!(
@@ -431,29 +432,415 @@ fn upower_coarse_stale_unknown_and_zero_percent_remain_distinct() {
     assert!(!upower::compatible_type(17, DeviceKind::Mouse));
 }
 
+// Schema/export: Sapd/HeadsetControl 4.2.0 (91ee690a5e302a10a6f4f75a46be05846a38a3b0),
+// cli/output/output{.cpp,_data.hpp} and tests/test_output_formats.cpp.
+// IDs/capabilities: lib/devices/logitech_g{533,535,930}.hpp. Battery samples are synthetic.
+fn headset_fixture() -> Value {
+    serde_json::from_str(include_str!("hardware_headsetcontrol.json")).unwrap()
+}
+
+fn headset_report(fixture: &Value) -> headsetcontrol::Report {
+    headsetcontrol::parse_json(&serde_json::to_vec(fixture).unwrap(), 1000).unwrap()
+}
+
 #[test]
 fn headsetcontrol_json_validates_api_readability_status_and_partial_records() {
     let report =
         headsetcontrol::parse_json(include_bytes!("hardware_headsetcontrol.json"), 1000).unwrap();
-    assert_eq!(report.api_version.as_deref(), Some("1.9"));
+    assert_eq!(report.api_version.as_deref(), Some("1.6"));
+    assert_eq!(report.devices.len(), 3);
+    assert_eq!(report.devices[0].vendor_id, 0x046d);
+    assert_eq!(report.devices[0].product_id, 0x0a66);
+    assert_eq!(report.devices[0].name, "Logitech G533");
+    assert!(report.devices[0].readable_battery);
     assert_eq!(report.devices[0].battery.percentage, Some(64.0));
     assert_eq!(report.devices[0].battery.charging, Some(false));
+    assert_eq!(report.devices[0].battery.observed_at, 1000);
+    assert_eq!(
+        report.devices[0].battery.source,
+        ProviderKind::Headsetcontrol
+    );
+    assert_eq!(report.devices[1].vendor_id, 0x046d);
+    assert_eq!(report.devices[1].product_id, 0x0ac4);
+    assert!(report.devices[1].readable_battery);
     assert_eq!(report.devices[1].battery.percentage, Some(72.0));
     assert_eq!(report.devices[1].battery.charging, Some(true));
     for sample in &report.devices[2..] {
         assert_eq!(sample.battery.percentage, None);
         assert_eq!(sample.battery.charging, None);
     }
-    let unknown = include_str!("hardware_headsetcontrol.json").replace("1.9", "99.0");
-    assert!(headsetcontrol::parse_json(unknown.as_bytes(), 1000)
-        .unwrap()
-        .devices
-        .iter()
-        .all(|d| d.battery.percentage.is_none()));
-    assert!(headsetcontrol::parse_json(b"not JSON", 1000).is_err());
+    for malformed in [
+        &b"not JSON"[..],
+        &b"[]"[..],
+        &b"{}"[..],
+        &b"{\"devices\":null}"[..],
+        &b"{\"devices\":{}}"[..],
+    ] {
+        assert!(headsetcontrol::parse_json(malformed, 1000).is_err());
+    }
     assert!(
         headsetcontrol::parse_json(&vec![b' '; providers::MAX_PROVIDER_BYTES + 1], 1000).is_err()
     );
+    let mut oversized = headset_fixture();
+    oversized["devices"] = json!(vec![
+        oversized["devices"][0].clone();
+        providers::MAX_DEVICES + 1
+    ]);
+    oversized["device_count"] = json!(providers::MAX_DEVICES + 1);
+    assert!(headsetcontrol::parse_json(&serde_json::to_vec(&oversized).unwrap(), 1000).is_err());
+}
+
+#[test]
+fn headsetcontrol_unknown_or_missing_api_never_exposes_battery() {
+    for version in [
+        json!("1.5"),
+        json!("1.8"),
+        json!("1.9"),
+        json!("99.0"),
+        json!(1.6),
+        Value::Null,
+    ] {
+        let mut fixture = headset_fixture();
+        fixture["api_version"] = version;
+        let report = headset_report(&fixture);
+        assert_eq!(report.devices.len(), 3);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.id == "headsetcontrol-api"));
+        assert!(report.devices.iter().all(|d| {
+            !d.readable_battery && d.battery.percentage.is_none() && d.battery.charging.is_none()
+        }));
+    }
+    let mut fixture = headset_fixture();
+    fixture.as_object_mut().unwrap().remove("api_version");
+    let report = headset_report(&fixture);
+    assert_eq!(report.api_version, None);
+    assert!(report
+        .devices
+        .iter()
+        .all(|d| d.battery.percentage.is_none() && d.battery.charging.is_none()));
+}
+
+#[test]
+fn headsetcontrol_missing_malformed_or_mismatched_count_is_fail_closed() {
+    for count in [
+        None,
+        Some(Value::Null),
+        Some(json!("3")),
+        Some(json!(-1)),
+        Some(json!(3.0)),
+        Some(json!(2)),
+        Some(json!(4)),
+    ] {
+        let mut fixture = headset_fixture();
+        match count {
+            Some(count) => fixture["device_count"] = count,
+            None => {
+                fixture.as_object_mut().unwrap().remove("device_count");
+            }
+        }
+        let report = headset_report(&fixture);
+        assert_eq!(report.devices.len(), 3);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.id == "headsetcontrol-api"));
+        assert!(report.devices.iter().all(|d| {
+            !d.readable_battery && d.battery.percentage.is_none() && d.battery.charging.is_none()
+        }));
+    }
+}
+
+#[test]
+fn headsetcontrol_readability_uses_only_the_verified_battery_capability() {
+    let mut fixture = headset_fixture();
+    assert!(fixture["devices"][0].get("readable_capabilities").is_none());
+    fixture["devices"][0]["readable_capabilities"] = json!([]);
+    assert_eq!(
+        headset_report(&fixture).devices[0].battery.percentage,
+        Some(64.0)
+    );
+    for caps in [
+        None,
+        Some(Value::Null),
+        Some(json!([])),
+        Some(json!(["battery"])),
+        Some(json!(["CAP_SIDETONE"])),
+        Some(json!(["CAP_BATTERY_STATUS", 1])),
+        Some(json!(vec!["CAP_BATTERY_STATUS"; 129])),
+    ] {
+        let mut fixture = headset_fixture();
+        fixture["devices"][0]["readable_capabilities"] = json!(["CAP_BATTERY_STATUS"]);
+        match caps {
+            Some(caps) => fixture["devices"][0]["capabilities"] = caps,
+            None => {
+                fixture["devices"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("capabilities");
+            }
+        }
+        let report = headset_report(&fixture);
+        assert!(!report.devices[0].readable_battery);
+        assert_eq!(report.devices[0].battery.percentage, None);
+        assert_eq!(report.devices[0].battery.charging, None);
+    }
+}
+
+#[test]
+fn headsetcontrol_partial_failed_malformed_and_unknown_batteries_are_not_values() {
+    let mut records = Vec::new();
+    for status in ["partial", "failure", "unknown", "invented"] {
+        let mut device = headset_fixture()["devices"][0].clone();
+        device["status"] = json!(status);
+        records.push(device);
+    }
+    for errors in [
+        json!({"battery": "HID timeout"}),
+        json!({"battery": null}),
+        json!([]),
+        Value::Null,
+    ] {
+        let mut device = headset_fixture()["devices"][0].clone();
+        device["errors"] = errors;
+        records.push(device);
+    }
+    for status in [
+        "BATTERY_UNAVAILABLE",
+        "BATTERY_ERROR",
+        "BATTERY_TIMEOUT",
+        "UNKNOWN",
+        "invented",
+    ] {
+        let mut device = headset_fixture()["devices"][0].clone();
+        device["battery"]["status"] = json!(status);
+        records.push(device);
+    }
+    for status in ["BATTERY_AVAILABLE", "BATTERY_CHARGING"] {
+        for level in [
+            None,
+            Some(Value::Null),
+            Some(json!("64")),
+            Some(json!(64.5)),
+            Some(json!(-2)),
+            Some(json!(101)),
+        ] {
+            let mut device = headset_fixture()["devices"][0].clone();
+            device["battery"]["status"] = json!(status);
+            match level {
+                Some(level) => device["battery"]["level"] = level,
+                None => {
+                    device["battery"].as_object_mut().unwrap().remove("level");
+                }
+            }
+            records.push(device);
+        }
+    }
+    for battery in [None, Some(Value::Null), Some(json!({})), Some(json!(64))] {
+        let mut device = headset_fixture()["devices"][0].clone();
+        match battery {
+            Some(battery) => device["battery"] = battery,
+            None => {
+                device.as_object_mut().unwrap().remove("battery");
+            }
+        }
+        records.push(device);
+    }
+    let mut invalid_available = headset_fixture()["devices"][0].clone();
+    invalid_available["battery"]["level"] = json!(-1);
+    records.push(invalid_available);
+    for device in records {
+        let mut fixture = headset_fixture();
+        fixture["devices"][0] = device;
+        let report = headset_report(&fixture);
+        assert_eq!(report.devices[0].battery.percentage, None, "{fixture}");
+        assert_eq!(report.devices[0].battery.charging, None, "{fixture}");
+        assert_eq!(report.devices[1].battery.percentage, Some(72.0));
+    }
+}
+
+#[test]
+fn headsetcontrol_charging_unknown_level_and_percent_boundaries_are_not_invented() {
+    let mut fixture = headset_fixture();
+    fixture["devices"][1]["battery"]["level"] = json!(-1);
+    let report = headset_report(&fixture);
+    assert_eq!(report.devices[1].battery.percentage, None);
+    assert_eq!(report.devices[1].battery.level, None);
+    assert_eq!(report.devices[1].battery.charging, Some(true));
+    for level in [0, 100] {
+        fixture["devices"][0]["battery"]["level"] = json!(level);
+        assert_eq!(
+            headset_report(&fixture).devices[0].battery.percentage,
+            Some(level as f64)
+        );
+    }
+}
+
+#[test]
+fn headsetcontrol_probe_checks_the_same_contract_without_hardware() {
+    use peripheral_hub_lib::process::ProcessOutput;
+    let mut output = ProcessOutput {
+        stdout: include_bytes!("hardware_headsetcontrol.json").to_vec(),
+        stderr: String::new(),
+    };
+    assert!(headsetcontrol::conforms(&output));
+    output.stderr = " \n".to_owned();
+    assert!(headsetcontrol::conforms(&output));
+    output.stderr = "HID error".to_owned();
+    assert!(!headsetcontrol::conforms(&output));
+    output.stderr.clear();
+    let mut invalid = Vec::new();
+    for version in [
+        json!("1.8"),
+        json!("1.9"),
+        json!("99.0"),
+        json!(1.6),
+        Value::Null,
+    ] {
+        let mut fixture = headset_fixture();
+        fixture["api_version"] = version;
+        invalid.push(fixture);
+    }
+    for field in ["name", "api_version", "device_count"] {
+        let mut fixture = headset_fixture();
+        fixture.as_object_mut().unwrap().remove(field);
+        invalid.push(fixture);
+    }
+    let mut fixture = headset_fixture();
+    fixture["devices"][0]["capabilities"] = json!([1]);
+    invalid.push(fixture);
+    for fixture in invalid {
+        output.stdout = serde_json::to_vec(&fixture).unwrap();
+        assert!(!headsetcontrol::conforms(&output), "{fixture}");
+    }
+    output.stdout = b"not JSON".to_vec();
+    assert!(!headsetcontrol::conforms(&output));
+    let mut empty = headset_fixture();
+    empty["devices"] = json!([]);
+    empty["device_count"] = json!(0);
+    output.stdout = serde_json::to_vec(&empty).unwrap();
+    assert!(headsetcontrol::conforms(&output));
+}
+
+#[test]
+fn headsetcontrol_preserves_vendor_ids_without_undocumented_razer_battery_support() {
+    let mut fixture = headset_fixture();
+    fixture["devices"] = json!([
+        fixture["devices"][0],
+        {"status": "success", "device": "Razer USB metadata", "id_vendor": "0x1532", "id_product": "0x057d", "capabilities": [], "capabilities_str": []},
+        {"status": "success", "device": "HeadsetControl Test device", "id_vendor": "0xf00b", "id_product": "0xa00c", "capabilities": ["CAP_BATTERY_STATUS"], "capabilities_str": ["battery"], "battery": {"status": "BATTERY_AVAILABLE", "level": 42}}
+    ]);
+    let report = headset_report(&fixture);
+    assert_eq!(report.devices.len(), 2);
+    assert_eq!(
+        (report.devices[0].vendor_id, report.devices[0].product_id),
+        (0x046d, 0x0a66)
+    );
+    assert_eq!(
+        (report.devices[1].vendor_id, report.devices[1].product_id),
+        (0x1532, 0x057d)
+    );
+    assert!(!report.devices[1].readable_battery);
+    assert_eq!(report.devices[1].battery.percentage, None);
+    assert_eq!(report.devices[1].battery.charging, None);
+}
+
+#[test]
+fn headsetcontrol_duplicate_json_and_unidentified_records_do_not_associate_hardware() {
+    let usb = vec![usb(
+        "/sys/devices/usb1/1-2",
+        Some("HEADSET_A"),
+        0x046d,
+        0x0a66,
+        true,
+    )];
+    let mut fixture = headset_fixture();
+    let mut duplicate = fixture["devices"][0].clone();
+    duplicate["battery"]["level"] = json!(42);
+    fixture["devices"].as_array_mut().unwrap().push(duplicate);
+    fixture["device_count"] = json!(4);
+    let report = headset_report(&fixture);
+    assert_eq!(report.devices[0].battery.percentage, Some(64.0));
+    assert_eq!(report.devices[3].battery.percentage, Some(42.0));
+    let mut discovery = Discovery::default();
+    devices::merge_usb(&mut discovery, &usb);
+    devices::associate_headset_batteries(&mut discovery, &usb, &report);
+    assert!(discovery.devices[0].values.battery.is_none());
+    assert!(discovery
+        .diagnostics
+        .iter()
+        .any(|d| d.id == "headsetcontrol-ambiguous"));
+    for record in [
+        Value::Null,
+        json!({}),
+        json!({"id_vendor": "0x046d"}),
+        json!({"id_vendor": "0x046d", "id_product": "0x10000"}),
+    ] {
+        let mut fixture = headset_fixture();
+        fixture["devices"].as_array_mut().unwrap().push(record);
+        fixture["device_count"] = json!(4);
+        let report = headset_report(&fixture);
+        assert!(report
+            .devices
+            .iter()
+            .all(|d| d.battery.percentage.is_none() && d.battery.charging.is_none()));
+    }
+}
+
+#[test]
+fn headsetcontrol_fingerprint_only_tracks_supported_vendor_audio_and_generation() {
+    let logitech = usb(
+        "/sys/devices/usb1/1-2",
+        Some("LOGITECH_A"),
+        0x046d,
+        0x0a66,
+        true,
+    );
+    let razer = usb(
+        "/sys/devices/usb1/1-3",
+        Some("RAZER_A"),
+        0x1532,
+        0x057d,
+        true,
+    );
+    let key = headsetcontrol::usb_fingerprint(&[logitech.clone(), razer.clone()]);
+    assert_ne!(
+        headsetcontrol::usb_fingerprint(std::slice::from_ref(&razer)),
+        "[]"
+    );
+    assert_eq!(
+        key,
+        headsetcontrol::usb_fingerprint(&[razer.clone(), logitech.clone()])
+    );
+    let mut replacement = razer.clone();
+    replacement.instance.push_str(":replacement");
+    assert_ne!(
+        key,
+        headsetcontrol::usb_fingerprint(&[logitech.clone(), replacement])
+    );
+    let mut replacement = razer.clone();
+    replacement.identity.serial = Some("RAZER_B".to_owned());
+    assert_ne!(
+        key,
+        headsetcontrol::usb_fingerprint(&[logitech.clone(), replacement])
+    );
+    assert_ne!(
+        key,
+        headsetcontrol::usb_fingerprint(std::slice::from_ref(&logitech))
+    );
+    let mut incomplete = logitech.clone();
+    incomplete.identity.product_id = None;
+    let ignored = [
+        usb("/sys/devices/usb1/1-4", None, 0xf00b, 0xa00c, true),
+        usb("/sys/devices/usb1/1-5", None, 0x046d, 0xc094, false),
+        usb("/sys/devices/usb1/1-6", None, 0x1532, 0x00b8, false),
+        incomplete,
+    ];
+    assert_eq!(headsetcontrol::usb_fingerprint(&ignored), "[]");
+    let mut with_irrelevant = vec![logitech, razer];
+    with_irrelevant.extend(ignored);
+    assert_eq!(key, headsetcontrol::usb_fingerprint(&with_irrelevant));
 }
 
 #[test]
@@ -498,14 +885,14 @@ fn duplicate_headsets_do_not_receive_arbitrary_battery_or_vendor_audio_mapping()
             "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2",
             None,
             0x046d,
-            0x0aff,
+            0x0a66,
             true,
         ),
         usb(
             "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-3",
             None,
             0x046d,
-            0x0aff,
+            0x0a66,
             true,
         ),
     ];
@@ -513,13 +900,18 @@ fn duplicate_headsets_do_not_receive_arbitrary_battery_or_vendor_audio_mapping()
     devices::merge_usb(&mut discovery, &usb);
     let report =
         headsetcontrol::parse_json(include_bytes!("hardware_headsetcontrol.json"), 1000).unwrap();
+    assert_eq!(report.devices[0].battery.percentage, Some(64.0));
     devices::associate_headset_batteries(&mut discovery, &usb, &report);
     assert!(discovery.devices.iter().all(|d| d.values.battery.is_none()));
+    assert!(discovery
+        .diagnostics
+        .iter()
+        .any(|d| d.id == "headsetcontrol-ambiguous"));
     devices::associate_audio(
         &mut discovery,
         &[
-            audio("alsa_output.a", None, None, 0x046d, 0x0aff),
-            audio("alsa_output.b", None, None, 0x046d, 0x0aff),
+            audio("alsa_output.a", None, None, 0x046d, 0x0a66),
+            audio("alsa_output.b", None, None, 0x046d, 0x0a66),
         ],
         &usb,
     );
@@ -539,7 +931,7 @@ fn verified_physical_audio_mapping_avoids_generic_duplicate_and_single_usb_batte
         "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2",
         Some("HEADSET_A"),
         0x046d,
-        0x0aff,
+        0x0a66,
         true,
     )];
     let mut discovery = Discovery::default();
@@ -555,7 +947,7 @@ fn verified_physical_audio_mapping_avoids_generic_duplicate_and_single_usb_batte
             None,
             Some("pci-0000:00:14.0-usb-0:2:1.0"),
             0x046d,
-            0x0aff,
+            0x0a66,
         )],
         &usb,
     );
@@ -573,6 +965,49 @@ fn verified_physical_audio_mapping_avoids_generic_duplicate_and_single_usb_batte
     );
     assert!(devices::verified_usb_path("pci-0000:00:14.0-usb-0:20:1.0", &usb).is_none());
     assert!(devices::usb_physical_path("/sys/devices/../usb1/1-2").is_none());
+}
+
+#[test]
+fn headsetcontrol_audio_identity_requires_matching_vendor_product_and_physical_metadata() {
+    let usb = vec![usb("/sys/devices/usb1/1-2", None, 0x046d, 0x0a66, true)];
+    let mut discovery = Discovery::default();
+    devices::merge_usb(&mut discovery, &usb);
+    devices::associate_headset_batteries(&mut discovery, &usb, &headset_report(&headset_fixture()));
+    devices::associate_audio(
+        &mut discovery,
+        &[
+            audio(
+                "alsa_output.vendor_mismatch",
+                None,
+                Some("/sys/devices/usb1/1-2"),
+                0x1532,
+                0x057d,
+            ),
+            audio(
+                "alsa_output.product_mismatch",
+                None,
+                Some("/sys/devices/usb1/1-2"),
+                0x046d,
+                0x0ac4,
+            ),
+            audio("alsa_output.no_identity", None, None, 0x046d, 0x0a66),
+        ],
+        &usb,
+    );
+    assert_eq!(discovery.devices.len(), 4);
+    assert_eq!(
+        discovery.devices[0]
+            .values
+            .battery
+            .as_ref()
+            .unwrap()
+            .percentage,
+        Some(64.0)
+    );
+    assert!(discovery.devices[0].output_node_names.is_empty());
+    assert!(discovery.devices[1..]
+        .iter()
+        .all(|d| d.brand == Brand::Generic && d.values.battery.is_none()));
 }
 
 #[test]
