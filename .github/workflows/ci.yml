@@ -24,12 +24,13 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  backend:
+   backend:
     name: Native Backend Checks & Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      with:
+      - uses: actions/setup-node@v4
+        with:
           node-version: 22
           cache: npm
       - run: npm ci
