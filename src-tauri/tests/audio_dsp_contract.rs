@@ -691,7 +691,7 @@ async fn pcm_probe(server: &StagedServer, record: &Journal) {
     );
     let mut peaks = [0.0_f32; 2];
     for (index, sample) in bytes.as_chunks::<4>().0.iter().enumerate() {
-        let sample = f32::from_le_bytes(sample.try_into().unwrap());
+        let sample = f32::from_le_bytes(*sample);
         assert!(sample.is_finite(), "Non-finite DSP output sample");
         peaks[index % 2] = peaks[index % 2].max(sample.abs());
     }
