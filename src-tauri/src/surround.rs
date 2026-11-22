@@ -14,6 +14,24 @@ pub(crate) const MAX_SOFA_BYTES: usize = 64 * 1024 * 1024;
 const RESTORE_FILE: &str = "audio-restore.json";
 const SYSTEM_SOFA_PATH: &str = "/usr/share/libmysofa/default.sofa";
 
+pub(crate) fn resolve_system_sofa_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("PERIPHERAL_HUB_SOFA_PATH").map(PathBuf::from) {
+        if path.is_file() {
+            return path;
+        }
+    }
+    for candidate in &[
+        "/usr/share/libmysofa/default.sofa",
+        "/usr/local/share/libmysofa/default.sofa",
+    ] {
+        let p = Path::new(candidate);
+        if p.is_file() {
+            return p.to_path_buf();
+        }
+    }
+    PathBuf::from(SYSTEM_SOFA_PATH)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct HrtfSelection {
     pub path: PathBuf,
@@ -72,7 +90,7 @@ fn validate_sofa_container(bytes: &[u8]) -> AppResult<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn validate_native_sofa(path: &Path) -> AppResult<()> {
+pub(crate) fn validate_sofa_native(path: &Path) -> AppResult<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -130,14 +148,14 @@ fn validate_native_sofa(path: &Path) -> AppResult<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn validate_native_sofa(_path: &Path) -> AppResult<()> {
+pub(crate) fn validate_sofa_native(_path: &Path) -> AppResult<()> {
     Err(AppError::unsupported_platform())
 }
 
-pub(crate) fn resolve_hrtf(paths: &AppPaths, reference: &str) -> AppResult<HrtfSelection> {
+pub(crate) async fn resolve_hrtf(paths: &AppPaths, reference: &str) -> AppResult<HrtfSelection> {
     validate_hrtf_reference(reference)?;
     let path = if reference == SYSTEM_HRTF {
-        PathBuf::from(SYSTEM_SOFA_PATH)
+        resolve_system_sofa_path()
     } else {
         let root = paths.data_dir.join("hrtf");
         let path = root.join(reference);
@@ -160,7 +178,7 @@ pub(crate) fn resolve_hrtf(paths: &AppPaths, reference: &str) -> AppResult<HrtfS
     let bytes = read_limited(&path, MAX_SOFA_BYTES)
         .map_err(|error| hrtf_error().detail(error.to_string()))?;
     validate_sofa_container(&bytes)?;
-    validate_native_sofa(&path)?;
+    crate::audio_worker::validate_sofa(&path).await?;
     Ok(HrtfSelection {
         path,
         status: HrtfStatus {
@@ -175,7 +193,7 @@ pub(crate) fn resolve_hrtf(paths: &AppPaths, reference: &str) -> AppResult<HrtfS
     })
 }
 
-pub(crate) fn import_hrtf(paths: &AppPaths, source: &Path) -> AppResult<HrtfSelection> {
+pub(crate) async fn import_hrtf(paths: &AppPaths, source: &Path) -> AppResult<HrtfSelection> {
     if !source.is_absolute()
         || !source
             .extension()
@@ -192,10 +210,10 @@ pub(crate) fn import_hrtf(paths: &AppPaths, source: &Path) -> AppResult<HrtfSele
     private_dir(&root)?;
     let reference = format!("{}.sofa", Uuid::new_v4());
     let destination = root.join(&reference);
-    let result = (|| {
+    let result = async {
         write_new_private(&destination, &bytes)?;
         // Validate the controlled copy, so a changed source cannot race the import.
-        let mut selection = resolve_hrtf(paths, &reference)?;
+        let mut selection = resolve_hrtf(paths, &reference).await?;
         selection.status.display_name = source
             .file_name()
             .and_then(|name| name.to_str())
@@ -205,7 +223,8 @@ pub(crate) fn import_hrtf(paths: &AppPaths, source: &Path) -> AppResult<HrtfSele
             .take(120)
             .collect();
         Ok(selection)
-    })();
+    }
+    .await;
     if result.is_err() {
         let _ = fs::remove_file(destination);
     }
@@ -476,26 +495,30 @@ pub(crate) mod runtime {
         }
 
         pub async fn terminate(&mut self) -> AppResult<()> {
-            let result = if let Some(mut child) = self.child.take() {
-                let _ = child.start_kill();
-                match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
-                    Ok(result) => result.map(|_| ()).map_err(AppError::from),
-                    Err(_) => {
-                        tokio::spawn(async move {
-                            let _ = child.wait().await;
-                        });
-                        Err(AppError::new(
-                            ErrorCode::Timeout,
-                            "Attesa di chiusura del client PipeWire scaduta.",
-                        ))
+            let result = if let Some(child) = self.child.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(_)) => Ok(()),
+                    Ok(None) => {
+                        let _ = child.start_kill();
+                        match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
+                            Ok(result) => result.map(|_| ()).map_err(AppError::from),
+                            Err(_) => Err(AppError::new(
+                                ErrorCode::Timeout,
+                                "Attesa di chiusura del client PipeWire scaduta; handle conservato.",
+                            )),
+                        }
                     }
+                    Err(error) => Err(AppError::from(error)),
                 }
             } else {
                 Ok(())
             };
-            if let Some(task) = self.stderr_reader.take() {
-                task.abort();
-                let _ = task.await;
+            if result.is_ok() {
+                self.child.take();
+                if let Some(task) = self.stderr_reader.take() {
+                    task.abort();
+                    let _ = task.await;
+                }
             }
             result
         }
@@ -575,15 +598,31 @@ pub(crate) mod runtime {
                 command
                     .env("PIPEWIRE_CONFIG_DIR", &directory)
                     .env("PIPEWIRE_CONFIG_PREFIX", "")
-                    .env("PIPEWIRE_CONFIG_NAME", &config_path)
+                    .env("PIPEWIRE_CONFIG_NAME", "spatializer.conf")
                     .env("PIPEWIRE_DAEMON", "false")
                     .env_remove("PIPEWIRE_NO_CONFIG")
                     .env_remove("PIPEWIRE_PROPS")
                     .env_remove("PIPEWIRE_NODE")
                     .env_remove("PIPEWIRE_AUTOCONNECT");
+                // Eight spatializers may each load the dataset. Bound the DSP
+                // process too, not just the earlier validation worker.
+                unsafe {
+                    command.pre_exec(|| {
+                        let limit = libc::rlimit {
+                            rlim_cur: 1024 * 1024 * 1024,
+                            rlim_max: 1024 * 1024 * 1024,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0
+                            || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
                 let process = OwnedChild::spawn(command)?;
                 record.filter_process_id = process.id();
-                write_restore(paths, &record)?;
+                // The controller adopts ownership before persisting this PID.
                 Ok(Self {
                     process,
                     record: record.clone(),
@@ -601,8 +640,10 @@ pub(crate) mod runtime {
 
         pub async fn stop(&mut self) -> AppResult<()> {
             let result = self.process.terminate().await;
-            let _ = fs::remove_file(self.directory.join("spatializer.conf"));
-            let _ = fs::remove_dir(&self.directory);
+            if result.is_ok() {
+                let _ = fs::remove_file(self.directory.join("spatializer.conf"));
+                let _ = fs::remove_dir(&self.directory);
+            }
             result
         }
     }

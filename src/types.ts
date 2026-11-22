@@ -12,7 +12,8 @@ export interface RemappingCapability {
   keyCodes: number[]; reason: string | null;
 }
 export type MouseAction = { kind: "default" } | { kind: "mouseButton"; code: number }
-  | { kind: "key"; code: number } | { kind: "chord"; modifiers: number[]; key: number } | { kind: "disabled" };
+  | { kind: "key"; code: number } | { kind: "chord"; modifiers: number[]; key: number }
+  | { kind: "autoclicker"; cps: number; button?: number } | { kind: "disabled" };
 export interface MouseBinding { buttonId: string; action: MouseAction }
 export interface RemappingValues {
   state: "unavailable" | "inactive" | "starting" | "active" | "busy" | "error" | "paused";

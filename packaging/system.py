@@ -17,7 +17,7 @@ if sys.platform == "linux":
 # -I ignores PYTHONPATH, user site packages and the current working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (
-    APP, ENGINE, STATE, PackagingError, bundle_file, digest, json_file, load_targets,
+    APP, ENGINE, HEADSET, HEADSET_REPLUG_NOTICE, NATIVE_FAILURE, STATE, PackagingError, bundle_file, digest, json_file, load_targets, native_failure,
     package_name, parse_os_release, pgp_fingerprint, regular_bytes, resolve_packages,
     run, target_for, verify_bundle, version_at_least, write_json,
 )
@@ -210,7 +210,7 @@ def main():
         if not isinstance(choices, dict) or set(choices) != allowed or not all(type(value) is bool for value in choices.values()):
             raise PackagingError("Only explicit, known backend consent flags are accepted")
         manifest, manifest_hash = verify_bundle(args.bundle, request.get("manifest_sha256"))
-        release = parse_os_release(regular_bytes("/etc/os-release", 65536).decode())
+        release = parse_os_release(regular_bytes(Path("/etc/os-release").resolve(), 65536).decode())
         target = target_for(release)
         if target["id"] != request["target"] or target["id"] != manifest["target"]["id"]:
             raise PackagingError("Administrative target differs from verified user preflight")
@@ -224,7 +224,9 @@ def main():
                 raise PackagingError("Unknown installer state schema; repair refused without overwriting it")
         else:
             record = {"schema": 1, "app": APP, "created_files": {}, "services": {}}
-        record.update(status="installing", uid=uid, target=target["id"], version=manifest["app"]["version"], manifest_sha256=manifest_hash, choices=choices, pending=[])
+        record.update(status="installing", uid=uid, target=target["id"], version=manifest["app"]["version"], manifest_sha256=manifest_hash, choices=choices, pending=[], notices=[])
+        record.pop("error", None)
+        record.pop("headsetcontrol", None)
         STATE.parent.mkdir(parents=True, exist_ok=True)
         if STATE.parent.is_symlink():
             raise PackagingError("Installer state directory is a symlink")
@@ -248,6 +250,8 @@ def main():
                         run(operation["argv"], check=False, capture=False)
                     elif installed(target["manager"], APP):
                         run(operation["argv"], capture=False, timeout=1200)
+                if installed(target["manager"], APP):
+                    raise PackagingError("Native removal transaction left the app installed")
                 if request.get("purge"):
                     remove_owned_records(record)
                 record.update(status="removed", package_installed=False)
@@ -262,9 +266,12 @@ def main():
                 resolved, missing = resolve_packages(target, plan["packages"])
                 razer = next((entry["version"] for entry in resolved if entry["name"] in ("openrazer-daemon", "openrazer-meta")), facts.get("openrazer_version", ""))
                 if plan["repository"] and (missing or not version_at_least(razer, "3.12.4")):
-                    if not args.key or digest(regular_bytes(args.key, 128 * 1024, owner=uid)) != request.get("repository_key_sha256"):
+                    if not args.key:
                         raise PackagingError("Verified upstream repository key missing/changed")
-                    repository_setup(target, plan["repository"], regular_bytes(args.key, 128 * 1024, owner=uid), record)
+                    key_data = regular_bytes(args.key, 128 * 1024, owner=uid)
+                    if digest(key_data) != request.get("repository_key_sha256"):
+                        raise PackagingError("Verified upstream repository key missing/changed")
+                    repository_setup(target, plan["repository"], key_data, record)
                     resolved, missing = resolve_packages(target, plan["packages"])
                 if missing:
                     raise PackagingError("Packages unavailable in signed target repositories: " + ", ".join(missing))
@@ -285,6 +292,11 @@ def main():
                     targets.append(item["name"] + constraint if constraint.startswith("=") else item["name"])
                 native_install(target, package, targets, choices, repair=request["action"] == "repair", yes=request.get("yes", False))
                 record["package_installed"] = bool(installed(target["manager"], APP))
+                if not record["package_installed"]:
+                    raise PackagingError("Native package transaction did not leave the app installed")
+                failure = native_failure(NATIVE_FAILURE)
+                if failure:
+                    raise PackagingError("Native package configure did not complete: " + (failure["error"] or "configure is still pending"))
                 run(["systemctl", "daemon-reload"], capture=False)
                 run(["udevadm", "control", "--reload-rules"], capture=False)
                 # Do not trigger/rebind all existing HID devices; uaccess changes can require replug.
@@ -295,8 +307,9 @@ def main():
                     system_unit("upower.service", record)
                 if choices["openrazer"] and not any(item.startswith("openrazer:") for item in plan["pending"]):
                     configure_razer(target, facts, user.pw_name, record)
-                if Path("/usr/lib/peripheral-hub/headsetcontrol").is_file():
-                    record["pending"].append("headsetcontrol: reconnect existing headsets if new uaccess rules have not taken effect")
+                if HEADSET.is_file():
+                    record["notices"].append(HEADSET_REPLUG_NOTICE)
+                    record["headsetcontrol"] = {"user_access": "unknown", "reason": "System phase reloaded rules without triggering devices; only a desktop-user probe can verify HID access"}
                 record["status"] = "pending" if record["pending"] else "running"
         write_json(STATE, record)
         print(json.dumps(record, indent=2, sort_keys=True))

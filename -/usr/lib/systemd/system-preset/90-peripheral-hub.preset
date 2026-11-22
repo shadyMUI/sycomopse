@@ -1,0 +1,2 @@
+# Only the private service shipped by Peripheral Hub is enabled.
+enable peripheral-hub-input-remapper.service

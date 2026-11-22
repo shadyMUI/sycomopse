@@ -25,7 +25,7 @@ class StrictFailure(Exception):
         super().__init__(message)
 
 
-def strict_grab(sources_by_node, bindings, get_device_hash):
+def strict_grab(sources_by_node, bindings, get_device_hash, verify_source=None):
     required = {}
     hashes = set()
     for binding in bindings:
@@ -42,8 +42,13 @@ def strict_grab(sources_by_node, bindings, get_device_hash):
     grabbed = {}
     try:
         for node_id, device in sorted(required.items()):
+            if verify_source is not None:
+                verify_source(node_id, device)
             device.grab()
             grabbed[node_id] = device
+        for node_id, device in grabbed.items():
+            if verify_source is not None:
+                verify_source(node_id, device)
         # Do not replay queued pre-grab clicks or strand a key already held on
         # the original device. A short startup motion gap is safer than duplication.
         for device in grabbed.values():

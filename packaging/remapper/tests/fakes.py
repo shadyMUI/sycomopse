@@ -21,7 +21,7 @@ CALL = {"sender": ":1.10"}
 
 
 def raw_node(**changes):
-    node = RawNode("usb-port-controller-3", "/sys/devices/pci/usb1/1-3", "serial-unique", "interface1.0/input0", "Physical Mouse", "/dev/input/event5", "usb-controller-3/input0", "a" * 32, 0x1532, 0x0084, 3, "usb", (272, 273, 274, 275), (0, 1, 8), "/sys/devices/pci/usb1/1-3/1-3:1.0/input/input10", 13 * 256 + 5, 101)
+    node = RawNode("usb-port-controller-3", "/sys/devices/pci/usb1/1-3", "serial-unique", "interface1.0/input0", "Physical Mouse", "/dev/input/event5", "usb-controller-3/input0", "a" * 32, 0x1532, 0x0084, 3, "usb", (272, 273, 274, 275), (0, 1, 8), "/sys/devices/pci/usb1/1-3/1-3:1.0/input/input10", 13 * 256 + 5, 101, seat="seat0")
     return replace(node, **changes)
 
 
@@ -82,10 +82,15 @@ class FakeReader:
 
 
 class FakeHandle:
-    def __init__(self, status):
+    def __init__(self, status, after_start=None):
         self.current = status
         self.stops = 0
         self.stop_error = False
+        self.after_start = after_start
+
+    def start(self):
+        if self.after_start:
+            self.after_start()
 
     def status(self):
         return self.current
@@ -115,11 +120,9 @@ class FakeEngine:
         self.compiled.append(preset)
         return preset
 
-    def start(self, mouse, compiled, validated):
-        handle = FakeHandle(self.next_state)
+    def create_handle(self, mouse, compiled, validated):
+        handle = FakeHandle(self.next_state, self.after_start)
         self.handles.append(handle)
-        if self.after_start:
-            self.after_start()
         return handle
 
     def stop_all(self):
@@ -202,6 +205,13 @@ class FakeFilesystem:
 
     def fstat(self, descriptor):
         return SimpleNamespace(**self.nodes[self.descriptors[descriptor]]["stat"].__dict__)
+
+    def stat(self, path, dir_fd=None, follow_symlinks=True):
+        if dir_fd is not None:
+            path = str(PurePosixPath(self.descriptors[dir_fd]) / path)
+        if path not in self.nodes:
+            raise OSError("Injected missing path")
+        return SimpleNamespace(**self.nodes[path]["stat"].__dict__)
 
     def read(self, descriptor, size):
         self.read_calls += 1

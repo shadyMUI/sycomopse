@@ -14,11 +14,18 @@ from common import PackagingError, load_targets, resolve_packages, run
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--runtime-only", action="store_true")
     args = parser.parse_args()
-    if sys.platform != "linux" or os.geteuid() != 0 or os.environ.get("PH_CI_CONTAINER") != "1" or not Path("/.dockerenv").exists():
+    if sys.platform != "linux" or os.geteuid() != 0 or os.environ.get("PH_CI_CONTAINER") != "1" or not any(Path(name).is_file() for name in ("/.dockerenv", "/run/.containerenv", "/.containerenv")):
         raise PackagingError("Native dependency installation is allowed only in the explicit CI container")
     target = next(item for item in load_targets()["targets"] if item["id"] == args.target)
-    packages = target["build"] + target["runtime"] + target["headset"]
+    audio_sdk = {
+        "apt": ["libpipewire-0.3-dev", "libspa-0.2-dev", "libmysofa-dev", "lua5.4", "meson", "libsndfile1-dev", "patchelf"],
+        "pacman": ["pipewire", "libmysofa", "lua", "meson", "libsndfile", "patchelf"],
+        "dnf": ["pipewire-devel", "libmysofa-devel", "lua", "meson", "libsndfile-devel", "patchelf"],
+        "zypper": ["pipewire-devel", "libmysofa-devel", "lua54", "meson", "libsndfile-devel", "patchelf"],
+    }
+    packages = target["runtime"] if args.runtime_only else target["build"] + target["runtime"] + target["headset"] + target.get("audio", []) + audio_sdk[target["manager"]]
     resolved, missing = resolve_packages(target, packages)
     if missing:
         raise PackagingError("Clean image lacks required signed build packages: " + ", ".join(missing))

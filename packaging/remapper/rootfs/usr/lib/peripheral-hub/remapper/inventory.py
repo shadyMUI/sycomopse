@@ -11,6 +11,11 @@ from pathlib import Path
 import re
 import stat
 
+from validation import file_stamp
+
+
+SUPPORTED_SEAT = "seat0"
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
@@ -18,6 +23,13 @@ def digest(value):
 
 def clean_text(value, limit=256):
     return "".join(character for character in str(value or "") if character.isprintable())[:limit]
+
+
+def normalize_serial(value):
+    serial = clean_text(value).strip()
+    if serial.lower() in ("unknown", "none", "null") or not serial.strip("0:- "):
+        return None
+    return serial
 
 
 def usb_port_identity(path):
@@ -44,6 +56,7 @@ class RawNode:
     sysfs_path: str
     device_number: int
     inode: int
+    seat: str | None = None
     virtual: bool = False
     touchpad: bool = False
 
@@ -99,6 +112,11 @@ class Mouse:
     buttons: tuple[Button, ...]
 
     @property
+    def seat(self):
+        seats = {node.raw.seat for node in self.nodes}
+        return next(iter(seats)) if len(seats) == 1 else None
+
+    @property
     def signature(self):
         return digest([node.raw.__dict__ for node in self.nodes])
 
@@ -121,12 +139,17 @@ class Mouse:
 def build_inventory(observations, input_codes, code_name):
     groups = defaultdict(list)
     for node in observations:
-        if node.virtual or node.touchpad or not node.physical_key:
+        if node.virtual or node.touchpad or not node.physical_key or node.seat != SUPPORTED_SEAT:
             continue
         groups[(node.physical_key, node.bus_type, node.vendor_id, node.product_id)].append(node)
     candidates = []
     for physical, nodes in groups.items():
         pointers = [node for node in nodes if node.pointer]
+        if len(pointers) > 1:
+            pure = [node for node in pointers if all(272 <= c <= 279 for c in node.key_codes)]
+            if len(pure) == 1:
+                pointers = pure
+                nodes = [node for node in nodes if not any(c < 256 for c in node.key_codes)]
         # More than one pointer at an indistinguishable receiver/port is ambiguous.
         if len(pointers) != 1 or len(nodes) > 16:
             continue
@@ -183,6 +206,61 @@ class LinuxDiscovery:
         except (OSError, UnicodeError):
             return ""
 
+    @staticmethod
+    def _seat(sysfs):
+        # logind assigns evdev via its inputN parent, not the event devnode.
+        # A missing ID_SEAT means seat0 only in an initialized, trusted record.
+        if not re.fullmatch(r"input[0-9]+", sysfs.name):
+            return None
+        descriptors = []
+        try:
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            for part in ("/", "run", "udev", "data"):
+                descriptor = os.open(part, flags, **({"dir_fd": descriptors[-1]} if descriptors else {}))
+                descriptors.append(descriptor)
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                    return None
+            name = "+input:" + sysfs.name
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=descriptors[-1])
+            descriptors.append(descriptor)
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_mode & 0o022 or before.st_nlink != 1 or not 1 <= before.st_size <= 65536:
+                return None
+            data = b""
+            while len(data) <= 65536:
+                chunk = os.read(descriptor, min(16384, 65537 - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+            current = os.stat(name, dir_fd=descriptors[-2], follow_symlinks=False)
+            if file_stamp(before) != file_stamp(os.fstat(descriptor)) or file_stamp(before) != file_stamp(current) or len(data) != before.st_size or not data.endswith(b"\n") or b"\0" in data:
+                return None
+            records = defaultdict(list)
+            for line in data.decode("utf-8").splitlines():
+                if len(line) < 2 or line[1] != ":":
+                    return None
+                records[line[0]].append(line[2:])
+            initialized = records["I"]
+            version = records["V"]
+            if len(initialized) != 1 or not re.fullmatch(r"[1-9][0-9]{0,19}", initialized[0]) or version not in ([], ["1"]):
+                return None
+            if "seat" not in records["Q" if version else "G"]:
+                return None
+            properties = {}
+            for entry in records["E"]:
+                key, separator, value = entry.partition("=")
+                if not separator or not key or key in properties:
+                    return None
+                properties[key] = value
+            seat = properties.get("ID_SEAT") or SUPPORTED_SEAT
+            return seat if re.fullmatch(r"seat[A-Za-z0-9_-]{1,251}", seat) else None
+        except (OSError, UnicodeError, AttributeError):
+            return None
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
     def inspect(self, device):
         path = str(device.path)
         if not re.fullmatch(r"/dev/input/event[0-9]+", path):
@@ -193,6 +271,9 @@ class LinuxDiscovery:
             return None
         sysfs = (Path("/sys/class/input") / Path(path).name / "device").resolve(strict=True)
         if not str(sysfs).startswith("/sys/devices/"):
+            return None
+        seat = self._seat(sysfs)
+        if seat != SUPPORTED_SEAT:
             return None
         name = clean_text(device.name)
         phys = clean_text(device.phys)
@@ -223,7 +304,7 @@ class LinuxDiscovery:
                 usb = ancestor
                 break
         base_phys = re.sub(r"/input[0-9]+(?:/.*)?$", "", phys)
-        serial = clean_text(device.uniq or hid_properties.get("HID_UNIQ")) or None
+        serial = normalize_serial(device.uniq) or normalize_serial(hid_properties.get("HID_UNIQ"))
         if usb is not None and bus == 3:
             try:
                 same_usb_identity = int(self._text(usb / "idVendor"), 16) == vendor and int(self._text(usb / "idProduct"), 16) == product
@@ -236,7 +317,7 @@ class LinuxDiscovery:
             if receiver and not serial and not (272 in keys and {0, 1}.issubset(relative)):
                 return None
             if not serial and same_usb_identity and not receiver:
-                serial = clean_text(self._text(usb / "serial")) or None
+                serial = normalize_serial(self._text(usb / "serial"))
             physical_path = str(usb)
             endpoint = str(sysfs.relative_to(usb))
             interface = next((match[1] for part in sysfs.parts if (match := re.fullmatch(r"[0-9]+-[0-9.]+:([0-9]+\.[0-9]+)", part))), "")
@@ -249,14 +330,12 @@ class LinuxDiscovery:
             physical_key = json.dumps([base_phys, serial], separators=(",", ":"))
         else:
             return None
-        if serial and (serial.lower() in ("unknown", "none", "null") or not serial.strip("0:- ")):
-            serial = None
         endpoint = re.sub(r"[0-9]+-[0-9.]+:([0-9]+\.[0-9]+)", r"interface:\1", endpoint)
         endpoint = re.sub(r"([0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4})\.[0-9A-Fa-f]+", r"\1", endpoint)
         endpoint = re.sub(r"(?:^|/)input/input[0-9]+(?:/event[0-9]+)?$", "", endpoint)
         phys_role = phys[len(base_phys):] if base_phys else ""
         role = json.dumps([interface, endpoint, phys_role], separators=(",", ":"))
-        return RawNode(physical_key, physical_path, serial, role, name, path, phys, str(self.get_device_hash(device)), vendor, product, bus, transport, keys, relative, str(sysfs), opened.st_rdev, opened.st_ino, virtual, touchpad)
+        return RawNode(physical_key, physical_path, serial, role, name, path, phys, str(self.get_device_hash(device)), vendor, product, bus, transport, keys, relative, str(sysfs), opened.st_rdev, opened.st_ino, seat, virtual, touchpad)
 
     def scan(self):
         observations = []

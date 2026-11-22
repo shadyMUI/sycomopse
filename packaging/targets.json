@@ -13,6 +13,9 @@
     "obs_hardware": "E96C496E4E77C159C2FCA053062F9FD4D6D11CE4",
     "openrazer_ppa": "903936CAB6049E2E6C33D5D8073E051D7B2AEE37"
   },
+  "host_compatibility": [
+    {"target": "ubuntu-24.04", "os_release": {"ID": "pop", "VERSION_ID": "24.04", "UBUNTU_CODENAME": "noble"}}
+  ],
   "targets": [
     {
       "id": "arch", "os_id": "arch", "version_ids": [], "rolling": true,
@@ -35,7 +38,7 @@
       "runtime": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1", "libmysofa1", "pipewire-bin", "dbus", "systemd", "policykit-1", "python3 (>= 3.10)", "python3-evdev", "python3-psutil", "python3-dasbus", "python3-cairo", "python3-gi", "python3-pydantic", "python3-packaging", "gir1.2-gtk-3.0", "gir1.2-gtksource-4"],
       "audio": ["pipewire", "pipewire-bin", "wireplumber"], "pulse": ["pipewire-pulse"],
       "ratbag": ["ratbagd", "upower"], "razer": ["openrazer-daemon", "openrazer-driver-dkms", "dkms"],
-      "headset": ["libhidapi-hidraw0"], "headset_build": "release",
+      "headset": ["libhidapi-hidraw0"], "headset_build": "source",
       "build": ["build-essential", "git", "curl", "ca-certificates", "pkg-config", "libwebkit2gtk-4.1-dev", "libgtk-3-dev", "libayatana-appindicator3-dev", "librsvg2-dev", "libssl-dev", "cmake", "ninja-build", "libhidapi-dev", "dpkg-dev", "zstd", "binutils", "desktop-file-utils", "sudo"],
       "repository": {"kind": "ppa", "url": "https://ppa.launchpadcontent.net/openrazer/stable/ubuntu", "key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x903936CAB6049E2E6C33D5D8073E051D7B2AEE37", "key": "openrazer_ppa"}
     },
@@ -67,10 +70,10 @@
       "id": "fedora-44", "os_id": "fedora", "version_ids": ["44"], "support_until": "2027-05-01",
       "image": "registry.fedoraproject.org/fedora:44", "manager": "dnf", "format": "rpm",
       "runtime": ["webkit2gtk4.1", "gtk3", "libayatana-appindicator-gtk3", "libmysofa", "pipewire", "dbus", "systemd", "polkit", "python3 >= 3.10", "python3-evdev >= 1.6.1", "python3-psutil", "python3-dasbus", "python3-cairo", "python3-gobject", "python3-pydantic", "python3-packaging", "gtksourceview4"],
-      "audio": ["pipewire", "wireplumber"], "pulse": ["pipewire-pulseaudio"],
+      "audio": ["pipewire", "pipewire-utils", "wireplumber"], "pulse": ["pipewire-pulseaudio"],
       "ratbag": ["libratbag-ratbagd", "upower"], "razer": ["openrazer-meta", "dkms"],
       "headset": ["hidapi"], "headset_build": "source",
-      "build": ["gcc", "gcc-c++", "make", "git", "nodejs", "npm", "cmake", "ninja-build", "pkgconf-pkg-config", "webkit2gtk4.1-devel", "gtk3-devel", "libayatana-appindicator-gtk3-devel", "librsvg2-devel", "openssl-devel", "hidapi-devel", "rpm-build", "rpmdevtools", "cpio", "zstd", "binutils", "desktop-file-utils", "sudo", "dnf-plugins-core"],
+      "build": ["gcc", "gcc-c++", "make", "git", "nodejs24", "nodejs24-npm", "cmake", "ninja-build", "pkgconf-pkg-config", "webkit2gtk4.1-devel", "gtk3-devel", "libayatana-appindicator-gtk3-devel", "librsvg2-devel", "openssl-devel", "hidapi-devel", "rpm-build", "rpmdevtools", "cpio", "zstd", "binutils", "desktop-file-utils", "sudo", "dnf-plugins-core", "mysofa"],
       "repository": {"kind": "obs-rpm", "url": "https://download.opensuse.org/repositories/hardware:/razer/Fedora_44", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/Fedora_44/repodata/repomd.xml.key", "key": "obs_hardware"}
     },
     {

@@ -1,0 +1,30 @@
+{
+  "binary": "/usr/lib/peripheral-hub/pipewire/bin/pipewire",
+  "compiled": true,
+  "files": {
+    "bin/pipewire": "911e66d11d84f23c51180164b217b28723ed8af73071f9f0bb7e8af8fdb798d1",
+    "lib/libperipheral-hub-pipewire-0.3.so.0": "c50be396d306cdd50787895e1a738dbeadb96b99b481ed6c8c3e4b3a93fa40bc",
+    "lib/pipewire-0.3/libperipheral-hub-pipewire-protocol-native.so": "e8d08b3283732de4b18fd92f489afa67091a2aa843cf4a1adafc7ff55e0f5515",
+    "lib/pipewire-0.3/libpipewire-module-adapter.so": "e46a99291e5223995f569bbecd27384ffb378a41353630da2cc246fbb601fae9",
+    "lib/pipewire-0.3/libpipewire-module-client-device.so": "ea5a52edaff5e7627a9c1a105ca5225d9f6cd6686b05cf704c41e733e96dce42",
+    "lib/pipewire-0.3/libpipewire-module-client-node.so": "40fdff5d2ca1b85c3fadfcb3f6c93380e152cba44af37138abae293297b7fe09",
+    "lib/pipewire-0.3/libpipewire-module-filter-chain-sofa.so": "7525ec2faec5de1c5925244b407cc1357b66d5c7d71b75bc7a40b32d41db0066",
+    "lib/pipewire-0.3/libpipewire-module-filter-chain.so": "da08345a9078b6f737435202874208ed04105ef01b0632a93595e8d91509a7a8",
+    "lib/pipewire-0.3/libpipewire-module-protocol-native.so": "e8d08b3283732de4b18fd92f489afa67091a2aa843cf4a1adafc7ff55e0f5515",
+    "lib/spa-0.2/audioconvert/libspa-audioconvert.so": "3cf43860957823441f494f19aa3da9e80c520059c8f40097d885636381c1c1e8",
+    "lib/spa-0.2/support/libspa-support.so": "b5ef18fe744cbf1995b5bbb6e9ff9c3825c15c425297e6362174a6fea3939cab"
+  },
+  "generation": "pipewire-1.0.5-1ubuntu3.3-private-sofa-1",
+  "kind": "private-pipewire-client",
+  "license": "MIT AND BSD-3-Clause AND LGPL-2.1-or-later",
+  "moduleDir": "/usr/lib/peripheral-hub/pipewire/lib/pipewire-0.3",
+  "nativeProtocol": "0.3",
+  "patchset": "1ubuntu3.3",
+  "patchsetSha256": "a1650f8e95859b3a8057ea95dad7e0509bfed9896db5b0d17c70910c4e9a3ff0",
+  "prefix": "/usr/lib/peripheral-hub/pipewire",
+  "private": true,
+  "schemaVersion": 1,
+  "sourceSha256": "d5e5f3d0b8460e5711c1571c500156fd61768ba55a062eaeb94356abdb955a56",
+  "spaPluginDir": "/usr/lib/peripheral-hub/pipewire/lib/spa-0.2",
+  "version": "1.0.5"
+}

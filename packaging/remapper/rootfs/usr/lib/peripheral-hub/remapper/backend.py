@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import secrets
 import threading
 
+from inventory import SUPPORTED_SEAT
 from strict import EngineStatus, STATES
 from validation import BackendError, FINGERPRINT, PresetValidator, integer, preset_identity
 
@@ -63,9 +64,13 @@ class Backend:
             try:
                 status = record.handle.stop()
             except Exception:
+                record.state = "FAILED"
+                record.message = "Private injector shutdown could not be confirmed"
                 raise BackendError("BackendFailure", "Private injector shutdown could not be confirmed") from None
-            if not isinstance(status, EngineStatus) or status.active:
-                raise BackendError("BackendFailure", "Private injector is still active after shutdown")
+            if not isinstance(status, EngineStatus) or status.state != "STOPPED":
+                record.state = "FAILED"
+                record.message = "Private injector shutdown did not confirm termination"
+                raise BackendError("BackendFailure", "Private injector shutdown did not confirm termination")
         record.handle = None
         record.preset = None
         record.owner_uid = None
@@ -78,7 +83,7 @@ class Backend:
         if self.closed:
             raise BackendError("BackendFailure", "Private remapper is shutting down")
         try:
-            discovered = self.discovery.scan()
+            discovered = tuple(device for device in self.discovery.scan() if device.seat == SUPPORTED_SEAT)
         except Exception:
             for record in self.running.values():
                 if record.handle is not None:
@@ -192,7 +197,9 @@ class Backend:
             record.signature = device.signature
             record.state = "STARTING"
             try:
-                record.handle = self.engine.start(device, compiled, validated)
+                # Retain ownership before any process can acquire input descriptors.
+                record.handle = self.engine.create_handle(device, compiled, validated)
+                record.handle.start()
             except Exception:
                 self._stop_record(record, "FAILED", "The private injector could not be started")
                 return self._snapshot(fingerprint)
@@ -205,8 +212,10 @@ class Backend:
         with self.lock:
             uid = self.credentials.caller_uid(call_info)
             # Cleanup authorization intentionally does not depend on active logind.
-            self._refresh(check_sessions=False)
             record = self._expected(fingerprint, expected_preset, uid)
+            # A pending cleanup may finish in _refresh; preserve the checked CAS
+            # for this Stop rather than turning its confirmed exit into Conflict.
+            self._refresh(check_sessions=False)
             if record is not None:
                 self._stop_record(record)
             return self._snapshot(fingerprint)

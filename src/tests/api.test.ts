@@ -68,7 +68,7 @@ describe("contratti IPC Tauri", () => {
     const api = createTauriApi();
     const snapshot = await api.getSnapshot();
     expect(snapshot).toMatchObject({ platform: "unsupportedPlatform", demo: false, devices: [], audio: { available: false } });
-    expect(snapshot.diagnostics[0].message).toContain("backend Tauri");
+    expect(snapshot.diagnostics[0].message).toMatch(/Tauri backend|backend Tauri/);
     await expect(api.setDpi("mouse", 800, 800)).rejects.toMatchObject({ code: "unsupportedPlatform" });
     await expect(api.applyMouseRemapping("mouse", [], false, false)).rejects.toMatchObject({ code: "unsupportedPlatform" });
     await expect(api.disableMouseRemapping("mouse")).rejects.toMatchObject({ code: "unsupportedPlatform" });
@@ -242,7 +242,7 @@ describe("adapter demo esplicito", () => {
     const result = await api.applyMouseRemapping(device.id, [{ buttonId: "button-272", action: { kind: "default" } }], false, false);
     expect(result.devices[0].values.remapping).toMatchObject({ state: "inactive", enabled: false, activePreset: null });
     const capability = device.capabilities.remapping!;
-    expect(remappingProblem({ ...capability, keyCodes: [29, 30] }, [{ buttonId: "button-275", action: { kind: "mouseButton", code: 272 } }], false, false)).toContain("target consentiti");
+    expect(remappingProblem({ ...capability, keyCodes: [29, 30] }, [{ buttonId: "button-275", action: { kind: "mouseButton", code: 272 } }], false, false)).toMatch(/allowed by the provider|target consentiti/);
   });
 
   it("valida identita debole e consenso indipendentemente da DPI o polling scrivibili", async () => {
@@ -251,10 +251,10 @@ describe("adapter demo esplicito", () => {
     device.capabilities.polling = null;
     const capability = { ...device.capabilities.remapping!, identityStrength: "port" as const };
     const bindings: MouseBinding[] = [{ buttonId: "button-275", action: { kind: "key", code: 30 } }];
-    expect(remappingProblem(capability, bindings, true, false)).toContain("consenso esplicito");
+    expect(remappingProblem(capability, bindings, true, false)).toMatch(/explicit consent|consenso esplicito/);
     expect(remappingProblem(capability, bindings, true, true)).toBeNull();
     expect(remappingProblem(capability, bindings, false, false)).toBeNull();
-    expect(remappingProblem({ ...capability, fingerprint: null }, bindings, true, true)).toContain("non verificata");
+    expect(remappingProblem({ ...capability, fingerprint: null }, bindings, true, true)).toMatch(/not verified|non verificata/);
     expect(remappingProblem({ ...capability, writable: false }, bindings, false, false)).not.toBeNull();
     expect(remappingProblem({ ...capability, availability: "unsupportedPlatform" }, bindings, false, false)).not.toBeNull();
   });

@@ -1079,3 +1079,198 @@ fn properties_set_serialization_keeps_outer_property_variant_and_scalar_xy() {
     }
     assert!(ratbag::decode_resolution(&OwnedValue::from(800u32)).is_err());
 }
+
+#[test]
+fn openrazer_dummy_serial_identities_match_correctly() {
+    let real = identity(
+        Some("632517H31000663"),
+        Some("/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2"),
+        0x1532,
+        0x00b8,
+    );
+    let dummy = identity(
+        Some("UNKWN000000001460"),
+        Some("/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2"),
+        0x1532,
+        0x00b8,
+    );
+    let dummy2 = identity(
+        Some("UNKWN000000002345"),
+        Some("/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2"),
+        0x1532,
+        0x00b8,
+    );
+    let different_path = identity(
+        Some("UNKWN000000001460"),
+        Some("/sys/devices/pci0000:00/0000:00:14.0/usb1/1-3"),
+        0x1532,
+        0x00b8,
+    );
+
+    assert!(providers::identities_match(&real, &dummy));
+    assert!(providers::identities_match(&dummy, &dummy2));
+    assert!(!providers::identities_match(&real, &different_path));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn openrazer_persistence_config_parsing_precedence() {
+    let conf = r#"
+[DEFAULT]
+dpi_x = 1800
+dpi_y = 1800
+poll_rate = 500
+
+[632517H31000663]
+dpi_x = 3200
+dpi_y = 3200
+poll_rate = 1000
+
+[UNKWN000000001460]
+dpi_x = 800
+dpi_y = 800
+"#;
+    let (x, y, rate) = providers::openrazer::parse_existing_config(conf, "632517H31000663", None);
+    assert_eq!(x, Some(3200));
+    assert_eq!(y, Some(3200));
+    assert_eq!(rate, Some(1000));
+
+    let (x, y, rate) = providers::openrazer::parse_existing_config(conf, "UNKWN000000001460", None);
+    assert_eq!(x, Some(800));
+    assert_eq!(y, Some(800));
+    assert_eq!(rate, Some(500)); // falls back to DEFAULT
+
+    let (x, y, rate) = providers::openrazer::parse_existing_config(conf, "UNKWN000000009999", None);
+    assert_eq!(x, Some(1800));
+    assert_eq!(y, Some(1800));
+    assert_eq!(rate, Some(500));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn openrazer_persistence_config_formatting_and_no_duplicate_sections() {
+    let existing = r#"
+[DEFAULT]
+dpi_x = 1800
+dpi_y = 1800
+poll_rate = 500
+
+[632517H31000663]
+poll_rate = 500
+
+[UNKWN000000003606]
+dpi_x = 1800
+dpi_y = 1800
+poll_rate = 500
+scroll_active = True
+"#;
+
+    let output = providers::openrazer::format_persistence_config(
+        existing,
+        "UNKWN000000003606",
+        Some("632517H31000663"),
+        Some(DpiValue { x: 3200, y: 3200 }),
+        Some(1000),
+    );
+
+    // Verify [DEFAULT] is present and has updated values
+    assert!(output.starts_with("[DEFAULT]\ndpi_x = 3200\ndpi_y = 3200\npoll_rate = 1000"));
+
+    // Verify sections are unique (no duplicate headers)
+    let mut seen_headers = std::collections::HashSet::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            assert!(
+                seen_headers.insert(trimmed.to_string()),
+                "Duplicate section header found in formatted config: {trimmed}"
+            );
+        }
+    }
+
+    // Verify existing key `scroll_active = True` was preserved
+    assert!(output.contains("scroll_active = True"));
+
+    // Verify all 4097 UNKWN sections are present
+    assert!(seen_headers.contains("[UNKWN000000000000]"));
+    assert!(seen_headers.contains("[UNKWN000000004096]"));
+    assert!(seen_headers.contains("[632517H31000663]"));
+    assert!(seen_headers.contains("[UNKWN000000003606]"));
+
+    // Verify parsing precedence on the generated output
+    let (x, y, rate) = providers::openrazer::parse_existing_config(&output, "632517H31000663", None);
+    assert_eq!(x, Some(3200));
+    assert_eq!(y, Some(3200));
+    assert_eq!(rate, Some(1000));
+
+    let (x, y, rate) = providers::openrazer::parse_existing_config(&output, "UNKWN000000000042", None);
+    assert_eq!(x, Some(3200));
+    assert_eq!(y, Some(3200));
+    assert_eq!(rate, Some(1000));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn openrazer_format_persistence_preserves_unrelated_field_when_updating_single_metric() {
+    let conf = r#"
+[DEFAULT]
+dpi_x = 2400
+dpi_y = 2400
+poll_rate = 1000
+
+[UNKWN000000003606]
+dpi_x = 2400
+dpi_y = 2400
+poll_rate = 1000
+"#;
+    // Update poll_rate to 500 while passing Some(DpiValue { x: 2400, y: 2400 }) (as set_polling_rate now does)
+    let output = providers::openrazer::format_persistence_config(
+        conf,
+        "UNKWN000000003606",
+        None,
+        Some(DpiValue { x: 2400, y: 2400 }),
+        Some(500),
+    );
+    let (x, y, rate) = providers::openrazer::parse_existing_config(&output, "UNKWN000000003606", None);
+    assert_eq!(x, Some(2400));
+    assert_eq!(y, Some(2400));
+    assert_eq!(rate, Some(500));
+
+    // Update DPI to 3200 while passing previous rate 500 (as set_dpi now does)
+    let output2 = providers::openrazer::format_persistence_config(
+        &output,
+        "UNKWN000000003606",
+        None,
+        Some(DpiValue { x: 3200, y: 3200 }),
+        Some(500),
+    );
+    let (x2, y2, rate2) = providers::openrazer::parse_existing_config(&output2, "UNKWN000000003606", None);
+    assert_eq!(x2, Some(3200));
+    assert_eq!(y2, Some(3200));
+    assert_eq!(rate2, Some(500));
+}
+
+#[test]
+fn openrazer_dpi_capability_accepts_get_dpi_stages_as_getter() {
+    let xml = r#"<node>
+        <interface name="razer.device.dpi">
+            <method name="getDPIStages"><arg type="(ya(qq))" direction="out"/></method>
+            <method name="setDPI"><arg name="x" type="q" direction="in"/><arg name="y" type="q" direction="in"/></method>
+        </interface>
+    </node>"#;
+    let api = providers::parse_introspection(xml).expect("XML parse");
+    let cap = providers::openrazer::dpi_capability(
+        &api,
+        providers::openrazer::VIPER_PRODUCT,
+        Some(30000),
+        None,
+        Some(DpiValue { x: 1800, y: 1800 }),
+    );
+    assert!(cap.is_some());
+    let cap = cap.unwrap();
+    assert!(cap.writable);
+    assert!(cap.reason.is_none());
+}
+
+
+

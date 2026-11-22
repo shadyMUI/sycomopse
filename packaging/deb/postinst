@@ -2,6 +2,8 @@
 set -eu
 case "${1:-}" in
     configure)
+        chown -R root:root /usr/lib/peripheral-hub
+        chmod -R u=rwX,go=rX,go-w /usr/lib/peripheral-hub
         if [ -n "${2:-}" ]; then
             python3 -I -B /usr/lib/peripheral-hub/installer/native.py configure --format deb --upgrade
         else

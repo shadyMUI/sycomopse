@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod audio_worker;
 #[cfg(feature = "desktop")]
 mod commands;
 pub mod devices;
@@ -51,6 +52,8 @@ pub(crate) struct AppState {
     #[cfg(target_os = "linux")]
     hardware: Mutex<()>,
     #[cfg(target_os = "linux")]
+    remapping_lock: Mutex<()>,
+    #[cfg(target_os = "linux")]
     audio: Mutex<audio::AudioController>,
     #[cfg(target_os = "linux")]
     profiles: Mutex<profiles::ProfileStore>,
@@ -76,6 +79,8 @@ impl AppState {
             tray_created: AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             hardware: Mutex::new(()),
+            #[cfg(target_os = "linux")]
+            remapping_lock: Mutex::new(()),
             #[cfg(target_os = "linux")]
             audio: Mutex::new(audio),
             #[cfg(target_os = "linux")]
@@ -106,12 +111,34 @@ impl AppState {
     #[cfg(target_os = "linux")]
     async fn publish(&self, app: &AppHandle, update: impl FnOnce(&mut Snapshot)) -> Snapshot {
         let mut snapshot = self.snapshot.write().await;
-        update(&mut snapshot);
-        snapshot.revision = snapshot.revision.saturating_add(1);
-        let confirmed = snapshot.clone();
-        drop(snapshot);
-        let _ = app.emit("snapshot-changed", &confirmed);
-        confirmed
+        let mut next = snapshot.clone();
+        update(&mut next);
+        let changed = match (
+            serde_json::to_vec(&(
+                &next.devices,
+                &next.audio,
+                &next.profiles,
+                &next.diagnostics,
+            )),
+            serde_json::to_vec(&(
+                &snapshot.devices,
+                &snapshot.audio,
+                &snapshot.profiles,
+                &snapshot.diagnostics,
+            )),
+        ) {
+            (Ok(next_bytes), Ok(cur_bytes)) => next_bytes != cur_bytes,
+            _ => true,
+        };
+        if changed {
+            next.revision = snapshot.revision.saturating_add(1);
+            *snapshot = next.clone();
+            drop(snapshot);
+            let _ = app.emit("snapshot-changed", &next);
+            next
+        } else {
+            snapshot.clone()
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -184,20 +211,26 @@ impl AppState {
         );
         self.remapping.decorate(&mut discovery).await;
         for device in &mut discovery.devices {
+            let old = previous.devices.iter().find(|old| {
+                old.id == device.id
+                    || crate::providers::identities_match(&old.identity, &device.identity)
+            });
             if device.values.staged {
-                let old = previous
-                    .devices
-                    .iter()
-                    .find(|old| old.id == device.id && old.identity == device.identity);
                 device.values.dpi = old.and_then(|old| old.values.dpi);
                 device.values.polling_rate = old.and_then(|old| old.values.polling_rate);
             }
+            if device.values.dpi.is_none() {
+                if let Some(old_dpi) = old.and_then(|old| old.values.dpi) {
+                    device.values.dpi = Some(old_dpi);
+                }
+            }
+            if device.values.polling_rate.is_none() {
+                if let Some(old_rate) = old.and_then(|old| old.values.polling_rate) {
+                    device.values.polling_rate = Some(old_rate);
+                }
+            }
             if !include_batteries {
-                if let Some(old) = previous
-                    .devices
-                    .iter()
-                    .find(|old| old.id == device.id && old.identity == device.identity)
-                {
+                if let Some(old) = old {
                     if device.values.battery.is_none() {
                         device.values.battery = old.values.battery.clone().map(|mut battery| {
                             battery.stale |= now_secs().saturating_sub(battery.observed_at) > 90;
@@ -207,12 +240,14 @@ impl AppState {
                 }
             }
             // An unconfirmed ratbag staging value must not replace the last confirmed UI value.
-            if let Some((old, is_dpi)) = &preserve {
-                if old.id == device.id && old.identity == device.identity {
+            if let Some((old_dev, is_dpi)) = &preserve {
+                if old_dev.id == device.id
+                    || crate::providers::identities_match(&old_dev.identity, &device.identity)
+                {
                     if *is_dpi {
-                        device.values.dpi = old.values.dpi;
+                        device.values.dpi = old_dev.values.dpi;
                     } else {
-                        device.values.polling_rate = old.values.polling_rate;
+                        device.values.polling_rate = old_dev.values.polling_rate;
                     }
                 }
             }
@@ -266,7 +301,7 @@ impl AppState {
         self.require_platform()?;
         #[cfg(target_os = "linux")]
         {
-            let _guard = self.hardware.lock().await;
+            let _guard = self.remapping_lock.lock().await;
             let device = self
                 .snapshot
                 .read()
@@ -740,8 +775,8 @@ async fn tray_host_available() -> bool {
 
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
-    let (audio_sender, mut audio_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let (device_sender, mut device_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (audio_sender, mut audio_receiver) = tokio::sync::mpsc::channel(audio::MONITOR_CAPACITY);
+    let (device_sender, mut device_receiver) = tokio::sync::mpsc::channel(1);
     *state
         .monitor_task
         .lock()
@@ -782,10 +817,43 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            let _guard = remapping_state.hardware.lock().await;
+            let _guard = remapping_state.remapping_lock.lock().await;
             remapping_state
                 .refresh_remapping_locked(&remapping_app)
                 .await;
+        }
+    }));
+    let sync_app = app.clone();
+    let sync_state = state.clone();
+    state.track(tauri::async_runtime::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(1500));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let devices = sync_state.snapshot.read().await.devices.clone();
+            let mut hardware_changed = false;
+            for device in &devices {
+                if device.provider == ProviderKind::Openrazer && device.kind == DeviceKind::Mouse {
+                    if let Some((new_dpi, new_rate)) = crate::providers::openrazer::check_hardware_change(device).await {
+                        sync_state.publish(&sync_app, |snapshot| {
+                            for d in &mut snapshot.devices {
+                                if d.id == device.id || crate::providers::identities_match(&d.identity, &device.identity) {
+                                    if let Some(dpi) = new_dpi {
+                                        d.values.dpi = Some(dpi);
+                                    }
+                                    if let Some(rate) = new_rate {
+                                        d.values.polling_rate = Some(rate);
+                                    }
+                                }
+                            }
+                        }).await;
+                        hardware_changed = true;
+                    }
+                }
+            }
+            if hardware_changed {
+                sync_state.refresh_hardware(&sync_app, false).await;
+            }
         }
     }));
     let signal_app = app.clone();
@@ -836,41 +904,25 @@ pub fn run() {
             let tray_separator = PredefinedMenuItem::separator(app)?;
             let tray_exit = MenuItem::with_id(app, "tray-exit", "Esci", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&tray_open, &tray_separator, &tray_exit])?;
-            let skip_release = StdMutex::new(false);
+            let last_click = StdMutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
             let tray = TrayIconBuilder::with_id("peripheral-hub")
                 .icon(tauri::include_image!("icons/32x32.png"))
                 .tooltip("Peripheral Hub")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
-                // Linux exposes the context menu, but does not emit these events.
-                .on_tray_icon_event(move |tray, event| match event {
-                    TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Down,
-                        ..
-                    } => {
-                        *skip_release.lock().unwrap_or_else(|error| error.into_inner()) = false;
-                    }
-                    TrayIconEvent::DoubleClick {
-                        button: MouseButton::Left,
-                        ..
-                    } => {
-                        // Windows already toggled on the first release; ignore the second.
-                        *skip_release.lock().unwrap_or_else(|error| error.into_inner()) = true;
-                    }
-                    TrayIconEvent::Click {
+                .on_tray_icon_event(move |tray, event| {
+                    if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
-                    } => {
-                        let skip = std::mem::take(
-                            &mut *skip_release.lock().unwrap_or_else(|error| error.into_inner()),
-                        );
-                        if !skip {
+                    } = event
+                    {
+                        let mut last = last_click.lock().unwrap_or_else(|error| error.into_inner());
+                        if last.elapsed() >= std::time::Duration::from_millis(250) {
+                            *last = std::time::Instant::now();
                             toggle_window(tray.app_handle());
                         }
                     }
-                    _ => {}
                 })
                 .build(app);
             match tray {
@@ -945,7 +997,6 @@ pub fn run() {
             let state = app.state::<Arc<AppState>>();
             if !state.exit_ready.load(Ordering::SeqCst) {
                 api.prevent_exit();
-                #[cfg(not(target_os = "linux"))]
                 request_exit(app.clone());
             }
         }

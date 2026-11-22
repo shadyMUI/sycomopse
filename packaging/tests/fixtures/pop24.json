@@ -1,0 +1,10 @@
+{
+  "os_release": "NAME=\"Pop!_OS\"\nVERSION=\"24.04 LTS\"\nID=pop\nID_LIKE=\"ubuntu debian\"\nPRETTY_NAME=\"Pop!_OS 24.04 LTS\"\nVERSION_ID=\"24.04\"\nHOME_URL=\"https://pop.system76.com\"\nSUPPORT_URL=\"https://support.system76.com\"\nBUG_REPORT_URL=\"https://github.com/pop-os/pop/issues\"\nPRIVACY_POLICY_URL=\"https://system76.com/privacy\"\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\nLOGO=distributor-logo-pop-os\n",
+  "facts": {
+    "arch": "x86_64", "init": "systemd", "uid": 1000, "immutable": false,
+    "kernel": "6.17.9-76061709-generic", "kernel_headers_match": true,
+    "secure_boot": false, "session": true, "groups": ["users", "plugdev"],
+    "python": "3.12.3", "pulse_audio": false, "media_session": false,
+    "openrazer_version": "3.12.4-1", "openrazer_repository_version": "3.12.4-1"
+  }
+}

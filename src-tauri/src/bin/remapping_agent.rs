@@ -15,6 +15,9 @@ async fn main() {
     };
     if let Err(error) = peripheral_hub_lib::remapping::run_agent(disable_all).await {
         eprintln!("{}", error.message);
+        if let Some(detail) = error.detail {
+            eprintln!("{detail}");
+        }
         std::process::exit(1);
     }
 }

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 PRIVATE = Path(__file__).resolve().parents[1] / "rootfs/usr/lib/peripheral-hub/remapper"
@@ -88,6 +89,36 @@ class BackendTests(unittest.TestCase):
                 self.assert_error("AccessDenied", self.apply)
         self.sessions[UID] = [session(), session(path="/org/freedesktop/login1/session/duplicate")]
         self.assert_error("AccessDenied", self.apply)
+        self.assertEqual(self.engine.handles, [])
+
+    def test_foreign_or_unknown_device_seat_cannot_be_authorized_by_preset_owner(self):
+        for seat in ("seat1", None):
+            with self.subTest(seat=seat):
+                foreign = replace(self.mouse, nodes=tuple(replace(node, raw=replace(node.raw, seat=seat)) for node in self.mouse.nodes))
+                self.discovery.mice = (foreign,)
+                self.assertEqual(self.backend.inventory()["devices"], [])
+                self.assert_error("DeviceUnavailable", self.apply)
+        self.assertEqual(self.reader.reads, [])
+        self.assertEqual(self.engine.handles, [])
+
+    def test_maintenance_releases_mouse_after_seat_reassignment_or_metadata_loss(self):
+        self.apply()
+        foreign = replace(self.mouse, nodes=tuple(replace(node, raw=replace(node.raw, seat="seat1")) for node in self.mouse.nodes))
+        self.assertEqual(foreign.fingerprint, self.mouse.fingerprint)
+        self.assertNotEqual(foreign.signature, self.mouse.signature)
+        self.discovery.mice = (foreign,)
+        self.backend.maintain()
+        record = self.backend.running[self.mouse.fingerprint]
+        self.assertEqual(record.state, "FAILED")
+        self.assertIsNone(record.handle)
+        self.assertEqual(self.engine.handles[0].stops, 1)
+        self.assertEqual(self.backend.inventory()["generation"], 901)
+
+    def test_seat_reassignment_during_preset_read_never_starts(self):
+        self.backend.inventory()
+        unknown = replace(self.mouse, nodes=tuple(replace(node, raw=replace(node.raw, seat=None)) for node in self.mouse.nodes))
+        self.reader.after_read = lambda: setattr(self.discovery, "mice", (unknown,))
+        self.assert_error("StaleGeneration", self.apply, generation=900)
         self.assertEqual(self.engine.handles, [])
 
     def test_stale_generation_is_checked_before_preset_io(self):
@@ -229,6 +260,16 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(record.owner_uid, UID)
         self.assertEqual(record.preset, self.preset)
         self.assertIsNotNone(record.handle)
+
+    def test_inactive_status_alone_is_not_a_confirmed_stop_reply(self):
+        self.apply()
+        record = self.backend.running[self.mouse.fingerprint]
+        handle = record.handle
+        for status in (EngineStatus("FAILED"), EngineStatus("UNKNOWN"), EngineStatus("STARTING"), None):
+            with self.subTest(status=status), patch.object(handle, "stop", return_value=status):
+                self.assert_error("BackendFailure", self.backend.stop, self.mouse.fingerprint, self.preset, CALL)
+                self.assertIs(record.handle, handle)
+                self.assertEqual((record.owner_uid, record.preset), (UID, self.preset))
 
     def test_passthrough_only_apply_never_fabricates_running(self):
         passthrough = self.reader.put(payload_for(self.mouse, bindings=[]))
@@ -374,6 +415,16 @@ class InventoryTests(unittest.TestCase):
             with self.subTest(node=node):
                 self.assertEqual(self.inventory([node]), ())
 
+    def test_unsupported_and_uncertain_seats_are_filtered_from_all_composite_nodes(self):
+        for seat in ("seat1", None):
+            with self.subTest(seat=seat):
+                foreign = replace(raw_node(), seat=seat)
+                self.assertEqual(self.inventory([foreign]), ())
+                auxiliary = replace(foreign, node_role="auxiliary", origin_hash="b" * 32, key_codes=(30,), relative_codes=())
+                mouse = self.inventory([raw_node(), auxiliary])[0]
+                self.assertEqual(len(mouse.nodes), 1)
+                self.assertEqual(mouse.seat, "seat0")
+
     def test_composite_includes_only_verified_same_physical_identity(self):
         auxiliary = replace(raw_node(), node_role="interface1.1/input1", origin_hash="b" * 32, key_codes=(30, 164), relative_codes=(), path="/dev/input/event6")
         other_keyboard = replace(auxiliary, physical_key="different-device", name="Same model name", origin_hash="c" * 32)
@@ -390,6 +441,13 @@ class InventoryTests(unittest.TestCase):
     def test_ambiguous_multi_mouse_receiver_is_excluded(self):
         second = replace(raw_node(), node_role="second-pointer", origin_hash="b" * 32, path="/dev/input/event6")
         self.assertEqual(self.inventory([raw_node(), second]), ())
+
+    def test_composite_pointer_with_keyboard_interface_disambiguates_pure_mouse(self):
+        mouse_node = raw_node(key_codes=(272, 273, 274, 275, 276))
+        companion_keyboard_pointer = replace(mouse_node, node_role="interface1.1/input1", origin_hash="b" * 32, key_codes=tuple(range(1, 200)) + (272,), relative_codes=(0, 1), path="/dev/input/event6")
+        inventory = self.inventory([mouse_node, companion_keyboard_pointer])
+        self.assertEqual(len(inventory), 1)
+        self.assertEqual(inventory[0].first_pointer.raw.path if hasattr(inventory[0], "first_pointer") else inventory[0].nodes[0].raw.path, "/dev/input/event5")
 
     def test_conflicting_composite_serials_are_excluded(self):
         auxiliary = replace(raw_node(), node_role="auxiliary", origin_hash="b" * 32, key_codes=(30,), relative_codes=(), serial="other-physical-device")

@@ -23,6 +23,10 @@ APP = "peripheral-hub"
 AGENT = "peripheral-hub-remapping-agent.service"
 ENGINE = "peripheral-hub-input-remapper.service"
 STATE = Path("/var/lib/peripheral-hub/installer.json")
+NATIVE_STATE = STATE.with_name("native-status.json")
+NATIVE_FAILURE = STATE.with_name("native-failure.json")
+HEADSET = Path("/usr/lib/peripheral-hub/headsetcontrol")
+HEADSET_REPLUG_NOTICE = "headsetcontrol: reconnect existing headsets if new uaccess rules have not taken effect"
 MAX_JSON = 8 * 1024 * 1024
 SAFE_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:@() /<>=|~-]*$")
 
@@ -60,6 +64,35 @@ def json_file(path):
     if not isinstance(value, dict):
         raise PackagingError(f"Expected JSON object: {path}")
     return value
+
+
+def native_failure(path=NATIVE_FAILURE, owner=0):
+    path = Path(path)
+    try:
+        directory = path.parent.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise PackagingError("Cannot verify native state directory") from error
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != owner or directory.st_mode & 0o022:
+        raise PackagingError("Unsafe native state directory; configuration outcome unknown")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise PackagingError("Cannot verify native configuration checkpoint") from error
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != owner or info.st_mode & 0o022 or info.st_size > 32768:
+        raise PackagingError("Unsafe native configuration checkpoint")
+    try:
+        record = json.loads(regular_bytes(path, 32768, owner=owner))
+    except (OSError, ValueError) as error:
+        raise PackagingError("Invalid native configuration checkpoint") from error
+    if not isinstance(record, dict) or set(record) != {"schema", "app", "engine", "format", "status", "error"} or type(record.get("schema")) is not int or record["schema"] != 1:
+        raise PackagingError("Unknown native configuration checkpoint schema; preserved")
+    if record["app"] != APP or record["engine"] != ENGINE or record["format"] not in ("deb", "rpm", "arch") or record["status"] not in ("configuring", "failed") or not isinstance(record["error"], str) or len(record["error"]) > 4000:
+        raise PackagingError("Invalid native configuration checkpoint fields; preserved")
+    return record
 
 
 def write_json(path, data, mode=0o644):
@@ -152,12 +185,17 @@ def parse_os_release(text):
     return result
 
 
-def target_for(release, catalog=None, today=None):
+def target_for(release, catalog=None, today=None, allow_compatible=True):
+    if not isinstance(release, dict):
+        raise PackagingError("Expected os-release data")
     catalog = catalog or load_targets()
     for target in catalog["targets"]:
-        if target["os_id"] != release.get("ID"):
-            continue
-        if not target.get("rolling") and release.get("VERSION_ID") not in target["version_ids"]:
+        native = target["os_id"] == release.get("ID") and (target.get("rolling") or release.get("VERSION_ID") in target["version_ids"])
+        compatible = allow_compatible and any(
+            rule["target"] == target["id"] and all(release.get(key) == value for key, value in rule["os_release"].items())
+            for rule in catalog.get("host_compatibility", [])
+        )
+        if not native and not compatible:
             continue
         if "support_until" in target and (today or date.today()) >= date.fromisoformat(target["support_until"]):
             raise PackagingError(f"Target {target['id']} has expired; rebuild against a maintained Fedora release")
@@ -165,6 +203,18 @@ def target_for(release, catalog=None, today=None):
             raise PackagingError("Distribution codename/version mismatch")
         return target
     raise PackagingError(f"Unsupported target: {release.get('ID')} {release.get('VERSION_ID', '')}")
+
+
+def build_target(provenance, package_format):
+    if not isinstance(provenance, dict) or not isinstance(provenance.get("os_release"), dict) or not re.fullmatch(r"sha256:[a-f0-9]{64}", str(provenance.get("image_digest", ""))):
+        raise PackagingError("Bundle lacks the actual build image digest and os-release provenance")
+    # Compatibility is an installation policy, never evidence of a native build.
+    target = target_for(provenance["os_release"], allow_compatible=False)
+    if provenance.get("id") != target["id"] or package_format != target["format"]:
+        raise PackagingError("Build provenance differs from the native target/format")
+    if provenance.get("image") is not None and provenance["image"] != target["image"]:
+        raise PackagingError("Build image differs from the declared distribution/version")
+    return target
 
 
 def safe_relative(name):
@@ -218,6 +268,7 @@ def verify_bundle(root, expected=None):
     package = manifest.get("package", {})
     if package.get("file") not in files or package.get("format") not in ("deb", "rpm", "arch"):
         raise PackagingError("Native package missing from verified inventory")
+    build_target(manifest.get("target"), package["format"])
     for required in ("install.py", "common.py", "system.py", "targets.json"):
         if required not in files:
             raise PackagingError(f"Installer component missing: {required}")
@@ -297,11 +348,13 @@ def version_at_least(found, minimum):
 def headset_contract(output):
     if len(output) > 256 * 1024:
         return False, "JSON exceeds the Rust provider limit"
+    def reject_constant(value):
+        raise ValueError("Non-finite JSON number")
     try:
-        value = json.loads(output)
+        value = json.loads(output.decode("utf-8"), parse_constant=reject_constant)
     except (ValueError, UnicodeError):
         return False, "CLI did not emit JSON"
-    if not isinstance(value, dict) or value.get("api_version") != "1.6":
+    if not isinstance(value, dict) or value.get("name") != "HeadsetControl" or value.get("api_version") != "1.6":
         return False, "Verified HeadsetControl JSON API 1.6 is required"
     devices = value.get("devices")
     if not isinstance(devices, list) or len(devices) > 256:
@@ -312,18 +365,31 @@ def headset_contract(output):
         if not isinstance(device, dict):
             return False, "Invalid device record"
         for key in ("id_vendor", "id_product"):
-            if not isinstance(device.get(key), str) or not re.fullmatch(r"(?:0x)?[0-9a-fA-F]{4}", device[key]):
+            if not isinstance(device.get(key), str) or any(character in device[key] for character in "\x1c\x1d\x1e\x1f") or not re.fullmatch(r"(?:0[xX])?[0-9a-fA-F]{1,4}", device[key].strip()):
                 return False, f"Invalid {key}"
+        if not isinstance(device.get("device"), str) or device.get("status") not in ("success", "partial", "failure", "unknown"):
+            return False, "Invalid device name/status"
         for key in ("capabilities",):
             caps = device.get(key)
             if not isinstance(caps, list) or len(caps) > 128 or not all(isinstance(cap, str) for cap in caps):
                 return False, f"Missing/invalid {key} in the verified JSON schema"
+        if "errors" in device and (not isinstance(device["errors"], dict) or not all(isinstance(error, str) for error in device["errors"].values())):
+            return False, "Invalid errors record"
+        if "battery" in device:
+            battery = device["battery"]
+            if (not isinstance(battery, dict)
+                    or battery.get("status") not in ("BATTERY_AVAILABLE", "BATTERY_CHARGING", "BATTERY_UNAVAILABLE", "BATTERY_ERROR", "BATTERY_TIMEOUT", "UNKNOWN")
+                    or type(battery.get("level")) is not int or not -1 <= battery["level"] <= 100
+                    or battery["status"] == "BATTERY_AVAILABLE" and battery["level"] < 0):
+                return False, "Invalid battery record"
     return True, f"CLI schema {value['api_version']} verified; hardware support is unchanged"
 
 
 def probe_headset(executable):
+    report = {"configured": False, "user_access": "unknown", "probe_uid": os.geteuid()}
     if not executable:
-        return {"configured": False, "reason": "CLI is not installed"}
+        return dict(report, reason="CLI is not installed")
+    report["path"] = str(executable)
     try:
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             def bound_files():
@@ -339,14 +405,35 @@ def probe_headset(executable):
             output = stdout.read(256 * 1024 + 1)
             errors = stderr.read(64 * 1024 + 1)
     except (OSError, subprocess.TimeoutExpired) as error:
-        return {"configured": False, "path": str(executable), "reason": str(error)}
+        return dict(report, reason=str(error))
     good, reason = headset_contract(output)
     # Upstream 4.2.0 outputs a valid empty inventory and exits 1 when no headset
     # is attached. That verifies the software contract, not a battery reading.
-    no_devices = good and json.loads(output).get("device_count") == 0
+    devices = json.loads(output)["devices"] if good else []
+    if good:
+        report["device_count"] = len(devices)
+    no_devices = good and not devices
     if (result.returncode != 0 and not (result.returncode == 1 and no_devices)) or errors.strip():
         good, reason = False, "CLI probe failed or reported stderr; no confirmed battery samples"
-    return {"configured": good, "path": str(executable), "reason": reason}
+    elif good and any(
+        device.get("errors") or device.get("status") in ("failure", "partial")
+        or isinstance(device.get("battery"), dict) and device["battery"].get("status") in ("BATTERY_ERROR", "BATTERY_TIMEOUT")
+        for device in devices
+    ):
+        good, reason = False, "CLI reported a headset read error; check user access and device state"
+    # Enumeration (especially an empty inventory) and root reads do not prove
+    # desktop-user permissions. Require actual successful user battery samples.
+    if good and report["probe_uid"] > 0 and devices and all(
+        device.get("status") == "success" and int(device["id_vendor"].strip(), 16) in (0x046d, 0x1532)
+        and "CAP_BATTERY_STATUS" in device["capabilities"] and isinstance(device.get("battery"), dict)
+        and device["battery"].get("status") in ("BATTERY_AVAILABLE", "BATTERY_CHARGING")
+        and type(device["battery"].get("level")) is int and 0 <= device["battery"]["level"] <= 100
+        for device in devices
+    ):
+        report["user_access"] = "verified"
+    if good and report["user_access"] == "unknown":
+        reason += "; desktop-user access remains unknown until a successful user battery read"
+    return dict(report, configured=good, reason=reason)
 
 
 def https_bytes(url, maximum=32 * 1024 * 1024):
@@ -363,18 +450,44 @@ def https_bytes(url, maximum=32 * 1024 * 1024):
 
 
 def pgp_fingerprint(armored):
-    """Fingerprint the v4 primary key; package managers still verify signatures."""
-    text = armored.decode("ascii")
-    match = re.search(r"-----BEGIN PGP PUBLIC KEY BLOCK-----\s*\n(.*?)-----END PGP PUBLIC KEY BLOCK-----", text, re.S)
-    if not match:
-        raise PackagingError("Expected an ASCII-armored repository public key")
-    lines = [line.strip() for line in match[1].splitlines()]
-    payload = "".join(line for line in lines if line and not line.startswith("=") and ":" not in line)
+    """Validate one complete v4 public certificate before importing its bytes."""
+    if len(armored) > 128 * 1024:
+        raise PackagingError("Repository public key exceeds size limit")
     try:
-        data = base64.b64decode(payload, validate=True)
+        text = armored.decode("ascii").replace("\r\n", "\n")
+    except UnicodeDecodeError as error:
+        raise PackagingError("Expected an ASCII-armored repository public key") from error
+    begin, end = "-----BEGIN PGP PUBLIC KEY BLOCK-----", "-----END PGP PUBLIC KEY BLOCK-----"
+    match = re.fullmatch(r"[ \t\n]*" + begin + r"[ \t]*\n(.*?)\n" + end + r"[ \t\n]*", text, re.S)
+    if text.count(begin) != 1 or text.count(end) != 1 or not match:
+        raise PackagingError("Expected exactly one armored repository public key, without trailing data")
+    lines = [line.strip(" \t") for line in match[1].split("\n")]
+    while lines and re.fullmatch(r"[A-Za-z][A-Za-z0-9 -]*:[\t\x20-\x7e]*", lines[0]):
+        lines.pop(0)
+    if not lines or lines.pop(0):
+        raise PackagingError("Invalid armored public key header separator")
+    lines = [line for line in lines if line]
+    checksum = None
+    if lines and lines[-1].startswith("="):
+        if not re.fullmatch(r"=[A-Za-z0-9+/]{4}", lines[-1]):
+            raise PackagingError("Invalid armored public key checksum")
+        checksum = base64.b64decode(lines.pop()[1:], validate=True)
+    if not lines or any(not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", line) for line in lines):
+        raise PackagingError("Invalid armored public key payload")
+    try:
+        data = base64.b64decode("".join(lines), validate=True)
     except ValueError as error:
         raise PackagingError("Invalid armored public key") from error
+    if checksum is not None:
+        crc = 0xB704CE
+        for byte in data:
+            crc ^= byte << 16
+            for _ in range(8):
+                crc = (crc << 1) ^ (0x1864CFB if crc & 0x800000 else 0)
+        if crc.to_bytes(3, "big") != checksum:
+            raise PackagingError("Armored repository public key checksum mismatch")
     offset = 0
+    fingerprint = None
     while offset < len(data):
         header = data[offset]
         offset += 1
@@ -382,14 +495,20 @@ def pgp_fingerprint(armored):
             raise PackagingError("Invalid OpenPGP packet")
         if header & 0x40:
             tag = header & 0x3f
+            if offset >= len(data):
+                raise PackagingError("Truncated OpenPGP packet length")
             first = data[offset]
             offset += 1
             if first < 192:
                 length = first
             elif first < 224:
+                if offset >= len(data):
+                    raise PackagingError("Truncated OpenPGP packet length")
                 length = ((first - 192) << 8) + data[offset] + 192
                 offset += 1
             elif first == 255:
+                if offset + 4 > len(data):
+                    raise PackagingError("Truncated OpenPGP packet length")
                 length = int.from_bytes(data[offset:offset + 4], "big")
                 offset += 4
             else:
@@ -400,17 +519,29 @@ def pgp_fingerprint(armored):
             if length_type == 3:
                 raise PackagingError("Indeterminate OpenPGP length")
             count = (1, 2, 4)[length_type]
+            if offset + count > len(data):
+                raise PackagingError("Truncated OpenPGP packet length")
             length = int.from_bytes(data[offset:offset + count], "big")
             offset += count
+        if not length or length > len(data) - offset:
+            raise PackagingError("Empty or truncated repository public key packet")
         packet = data[offset:offset + length]
         offset += length
-        if len(packet) != length:
-            raise PackagingError("Truncated repository public key")
         if tag == 6:
-            if not packet or packet[0] != 4 or len(packet) > 65535:
+            if fingerprint is not None:
+                raise PackagingError("Multiple primary repository public keys are forbidden")
+            if len(packet) < 6 or packet[0] != 4 or len(packet) > 65535:
                 raise PackagingError("Unsupported repository key format")
-            return hashlib.sha1(b"\x99" + len(packet).to_bytes(2, "big") + packet).hexdigest().upper()
-    raise PackagingError("Repository key has no primary public key")
+            fingerprint = hashlib.sha1(b"\x99" + len(packet).to_bytes(2, "big") + packet).hexdigest().upper()
+        elif fingerprint is None or tag not in (2, 13, 14, 17):
+            # Do not unpack compressed/special packets: managers may import keys
+            # hidden in them. Retain only public-certificate packet types.
+            raise PackagingError(f"Forbidden repository public key packet: {tag}")
+        elif tag == 14 and (len(packet) < 6 or packet[0] != 4 or len(packet) > 65535):
+            raise PackagingError("Unsupported repository public subkey format")
+    if fingerprint is None:
+        raise PackagingError("Repository key has no primary public key")
+    return fingerprint
 
 
 def kernel_packages(target, facts):

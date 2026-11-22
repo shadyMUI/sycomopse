@@ -21,11 +21,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Python fixture and integrity tests (no installation)
-        run: python -m unittest discover -s packaging/tests -v
+        run: python -B -m unittest discover -s packaging/tests -v
 
   native-build:
+    needs: installer-fixtures
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +46,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Installer fixtures
-        run: python3 -m unittest discover -s packaging/tests -v
+        run: python3 -B -m unittest discover -s packaging/tests -v
       - name: Shell syntax
         run: |
           bash -n packaging/install.sh
@@ -53,13 +54,13 @@ jobs:
           bash -n packaging/arch/PKGBUILD
           bash -n packaging/arch/peripheral-hub.install
           for file in packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm; do bash -n "$file" || exit 1; done
-      - name: Native build, ELF/import audit and isolated systemd smoke
-        run: python3 packaging/ci/matrix.py --target '${{ matrix.target }}' --output packaging/out
-      - name: Upload packages, installer, manifest and corresponding sources
+      - name: Locked software gates, ELF/import audit and rootless systemd native smoke
+        run: python3 -B packaging/ci/matrix.py --engine podman --target '${{ matrix.target }}' --output packaging/out/quarantine
+      - name: Upload native-smoke-gated packages and evidence (no hardware certification)
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: peripheral-hub-0.1.0-${{ matrix.target }}-x86_64
-          path: packaging/out/peripheral-hub-0.1.0-${{ matrix.target }}-x86_64/
+          path: packaging/out/quarantine/peripheral-hub-0.1.0-${{ matrix.target }}-x86_64/
           if-no-files-found: error
           retention-days: 14

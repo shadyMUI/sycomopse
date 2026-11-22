@@ -14,15 +14,19 @@ from pathlib import Path, PurePosixPath
 from common import HERE, PackagingError, digest, https_bytes, json_file, probe_headset, regular_bytes, require_build_user, run, safe_relative
 
 
-def extract_source(data, destination):
+def extract_source(data, destination, *, allow_colons=False):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     seen = set()
     total = 0
     root = None
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
         for member in archive:
-            name = safe_relative(member.name.rstrip("/"))
+            raw = member.name.rstrip("/")
+            # PipeWire's Linux-only ALSA sample filenames contain a literal ':';
+            # preserve it without relaxing traversal/link checks for artifacts.
+            safe_relative(raw.replace(":", "_") if allow_colons else raw)
+            name = PurePosixPath(raw)
             if root is None:
                 root = name.parts[0]
             if name.parts[0] != root:
@@ -100,7 +104,8 @@ def headset_candidate(rootfs, target, work, artifacts, cache):
     result = {"configured": False, "private": False, "version": lock["version"], "source": archive.name, "selection": "none"}
     try:
         if target["headset_build"] == "source":
-            run(["cmake", "-S", str(source), "-B", str(binary.parent), "-DCMAKE_BUILD_TYPE=Release", f"-DHEADSETCONTROL_VERSION={lock['version']}", "-DBUILD_SHARED_LIBRARY=OFF"], capture=False, timeout=120)
+            extra_cxx = ["-DCMAKE_CXX_FLAGS=-static-libstdc++ -static-libgcc"] if target.get("id") == "ubuntu-22.04" else []
+            run(["cmake", "-S", str(source), "-B", str(binary.parent), "-DCMAKE_BUILD_TYPE=Release", f"-DHEADSETCONTROL_VERSION={lock['version']}", "-DBUILD_SHARED_LIBRARY=OFF", *extra_cxx], capture=False, timeout=120)
             run(["cmake", "--build", str(binary.parent), "--parallel", str(os.cpu_count() or 2)], capture=False, timeout=600)
             run(["ctest", "--test-dir", str(binary.parent), "--output-on-failure"], capture=False, timeout=120)
         else:

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "name": "input-remapper",
+  "version": "2.2.1",
+  "repository": "https://github.com/sezanzeb/input-remapper",
+  "commit": "e9a87d13480c3b1dee654b296578a8f4e2cd31d6",
+  "archiveUrl": "https://codeload.github.com/sezanzeb/input-remapper/tar.gz/e9a87d13480c3b1dee654b296578a8f4e2cd31d6",
+  "archiveRoot": "input-remapper-e9a87d13480c3b1dee654b296578a8f4e2cd31d6",
+  "archiveSha256": "0bb5d167c59d32e917be90c48190a776ead2c855d5d239f0854ce7538ac97159",
+  "license": "GPL-3.0-or-later",
+  "patches": [],
+  "privateExtension": "rootfs/usr/lib/peripheral-hub/remapper/managed_engine.py",
+  "sourceDateEpoch": 0
+}

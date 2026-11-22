@@ -476,25 +476,28 @@ class HeadsetStagingTests(unittest.TestCase):
 class ContractTests(unittest.TestCase):
     def test_headset_only_verified_upstream_api_strings(self):
         for api in ("1.6",):
-            self.assertTrue(common.headset_contract(json.dumps({"api_version": api, "devices": [], "device_count": 0}).encode())[0])
+            self.assertTrue(common.headset_contract(json.dumps({"name": "HeadsetControl", "api_version": api, "devices": [], "device_count": 0}).encode())[0])
         for api in ("1.8", "1.9", "3.0", 1.6, 3, None):
-            self.assertFalse(common.headset_contract(json.dumps({"api_version": api, "devices": []}).encode())[0])
+            self.assertFalse(common.headset_contract(json.dumps({"name": "HeadsetControl", "api_version": api, "devices": [], "device_count": 0}).encode())[0])
 
     def test_headset_official_capabilities_without_invented_readable_array(self):
-        value = {"api_version": "1.6", "device_count": 1, "devices": [{"id_vendor": "0x046d", "id_product": "0x0a66"}]}
+        value = common.json_file(PACKAGING / "tests/fixtures/headsetcontrol-4.2.json")
+        value["devices"] = value["devices"][:1]
+        value["device_count"] = 1
+        capabilities = value["devices"][0].pop("capabilities")
         self.assertFalse(common.headset_contract(json.dumps(value).encode())[0])
-        value["devices"][0]["capabilities"] = ["CAP_BATTERY_STATUS"]
+        value["devices"][0]["capabilities"] = capabilities
         self.assertTrue(common.headset_contract(json.dumps(value).encode())[0])
 
     def test_headset_count_and_provider_limits_match_rust(self):
         self.assertFalse(common.headset_contract(b" " * (256 * 1024 + 1))[0])
-        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.6", "devices": [], "device_count": 1}).encode())[0])
-        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.6", "devices": []}).encode())[0])
-        self.assertFalse(common.headset_contract(json.dumps({"api_version": "1.6", "devices": [None] * 257, "device_count": 257}).encode())[0])
+        self.assertFalse(common.headset_contract(json.dumps({"name": "HeadsetControl", "api_version": "1.6", "devices": [], "device_count": 1}).encode())[0])
+        self.assertFalse(common.headset_contract(json.dumps({"name": "HeadsetControl", "api_version": "1.6", "devices": []}).encode())[0])
+        self.assertFalse(common.headset_contract(json.dumps({"name": "HeadsetControl", "api_version": "1.6", "devices": [None] * 257, "device_count": 257}).encode())[0])
 
     def test_headset_upstream_empty_inventory_exit_one_verifies_software_only(self):
         def empty_inventory(argv, **kwargs):
-            kwargs["stdout"].write(b'{"api_version":"1.6","device_count":0,"devices":[]}')
+            kwargs["stdout"].write(b'{"name":"HeadsetControl","api_version":"1.6","device_count":0,"devices":[]}')
             return SimpleNamespace(returncode=1)
         with patch.object(common.subprocess, "run", side_effect=empty_inventory):
             result = common.probe_headset("/private/headsetcontrol")
@@ -502,7 +505,7 @@ class ContractTests(unittest.TestCase):
 
     def test_headset_arbitrary_error_is_not_an_empty_inventory_success(self):
         def failed(argv, **kwargs):
-            kwargs["stdout"].write(b'{"api_version":"1.6","device_count":0,"devices":[]}')
+            kwargs["stdout"].write(b'{"name":"HeadsetControl","api_version":"1.6","device_count":0,"devices":[]}')
             return SimpleNamespace(returncode=2)
         with patch.object(common.subprocess, "run", side_effect=failed):
             self.assertFalse(common.probe_headset("/private/headsetcontrol")["configured"])
@@ -545,11 +548,7 @@ class ContractTests(unittest.TestCase):
             common.pgp_fingerprint(b"not a repository key")
 
     def test_pgp_fingerprint_matches_existing_upstream_primary_key(self):
-        armored = b"""-----BEGIN PGP PUBLIC KEY BLOCK-----
-
-mQENBFQYVH0BCADCc8wxDZPh7bij3IjXTXllZq6aVFdrtZdWT7Lg+h1qLTbkhVq1W2wNAAZGb1OWqIwZrSm+OlDdgBCjeDCkBuxUzoq6IA3txKGjFWKUQgN6lwRKuOnEySh0rh3jK2+cE1V//AK6RGwltqL/tBQdNORZDWsxnxE4bYodhM+6MlXlxeqfmXAfW6v9XWrh0dHLOpC8gtr4Jewv5lYssHFCyTXx8WO/GfWf4bUo+ey6J6M1WMO+1ApM9jbMRcRpKZcVsI3iUz9hZnzzmqmNMnD+QZPgcaKAcItR2OFbejOVjWL4j/fPXK29p21swCvBE14UxinFdhyocCd3f2U4a/xZfsunABEBAAG0
------END PGP PUBLIC KEY BLOCK-----
-"""
+        armored = common.regular_bytes(PACKAGING / "tests/fixtures/obs-hardware.asc")
         self.assertEqual(common.pgp_fingerprint(armored), "E96C496E4E77C159C2FCA053062F9FD4D6D11CE4")
 
     def test_cli_dry_run_on_windows_uses_only_fixture_and_never_elevation(self):

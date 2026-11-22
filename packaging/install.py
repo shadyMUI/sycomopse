@@ -12,8 +12,9 @@ import tempfile
 from pathlib import Path
 
 from common import (
-    AGENT, APP, ENGINE, HERE, STATE, PackagingError, digest, https_bytes,
-    json_file, kernel_packages, load_targets, package_name, parse_os_release,
+    AGENT, APP, ENGINE, HEADSET, HEADSET_REPLUG_NOTICE, HERE, NATIVE_FAILURE, NATIVE_STATE, STATE,
+    PackagingError, build_target, digest, https_bytes,
+    json_file, kernel_packages, load_targets, native_failure, package_name, parse_os_release,
     pgp_fingerprint, probe_headset, regular_bytes, resolve_packages, run,
     repository_version, target_for, verify_bundle, version_at_least, write_json,
 )
@@ -70,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="peripheral-hub-authorized-", dir="/var/
 '''
 
 
-def installed(manager, name):
+def installed(manager, name, details=False):
     commands = {
         "apt": ["dpkg-query", "-W", "-f=${db:Status-Status} ${Version}", name],
         "pacman": ["pacman", "-Q", name],
@@ -78,9 +79,27 @@ def installed(manager, name):
         "zypper": ["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", name],
     }
     result = run(commands[manager], check=False)
-    if result.returncode or (manager == "apt" and not result.stdout.startswith("installed ")):
+    if result.returncode:
+        missing = {
+            "apt": f"dpkg-query: no packages found matching {name}",
+            "pacman": f"error: package '{name}' was not found",
+            "dnf": f"package {name} is not installed", "zypper": f"package {name} is not installed",
+        }[manager]
+        if result.returncode == 1 and (result.stdout + "\n" + result.stderr).strip() == missing:
+            return None
+        raise PackagingError(f"Cannot determine installation of {name}: package status unknown ({result.stderr.strip() or result.stdout.strip()})")
+    fields = result.stdout.split()
+    if not fields:
+        raise PackagingError(f"Cannot determine installation of {name}: empty package query")
+    state = fields[0] if manager == "apt" else "installed"
+    if state in ("not-installed", "config-files"):
         return None
-    return result.stdout.strip().split()[-1]
+    if manager == "apt" and (len(fields) != 2 or state not in ("installed", "unpacked", "half-installed", "half-configured", "triggers-awaited", "triggers-pending")):
+        raise PackagingError(f"Cannot determine installation of {name}: unknown dpkg status")
+    version = fields[-1]
+    if details:
+        return {"state": state, "version": version}
+    return version if state == "installed" else None
 
 
 def facts_for(target, user=True):
@@ -141,8 +160,8 @@ def preflight(target, facts, manifest=None):
         built = manifest.get("target", {})
         if built.get("id") != target["id"] or manifest["package"]["format"] != target["format"]:
             raise PackagingError("This bundle was built for a different distribution/version")
-        if not built.get("os_release") or not built.get("image_digest"):
-            raise PackagingError("Bundle lacks the actual build image and os-release provenance")
+        if build_target(built, manifest["package"]["format"])["id"] != target["id"]:
+            raise PackagingError("This bundle was built for a different distribution/version")
         if manifest.get("validation", {}).get("native_smoke") != "passed":
             raise PackagingError("Bundle has not passed native install/upgrade/repair smoke tests")
     if not facts.get("kernel"):
@@ -293,6 +312,9 @@ def choices_for(args, target, facts):
 
 def print_plan(plan, manifest, facts):
     print(f"Peripheral Hub 0.1.0 | {plan['target']} | {plan['action']} | kernel {facts['kernel']}")
+    if plan.get("compatible_host"):
+        host = plan["host_os_release"]
+        print(f"Host: {host.get('PRETTY_NAME', host['ID'] + ' ' + host.get('VERSION_ID', ''))}; explicit Noble-base compatibility, not a native Pop build")
     print("Native packages: " + ", ".join(plan["packages"]))
     if plan["repository"]:
         print("Official repository: " + plan["repository"]["url"])
@@ -314,6 +336,84 @@ def print_plan(plan, manifest, facts):
         candidate = (manifest or {}).get("components", {}).get("headsetcontrol", {})
         print("HeadsetControl: " + candidate.get("reason", headset.get("reason", "not configured")))
     print("Repository signatures remain enabled. Local artifacts are checksum-verified, not automatically signed; stricter native signing policies are respected.")
+
+
+def installation_status(target, facts):
+    state = json_file(STATE) if STATE.exists() else None
+    checkpoint = json_file(NATIVE_STATE) if NATIVE_STATE.exists() else None
+    for record, identity in ((state, {"app": APP}), (checkpoint, {"engine": ENGINE, "format": target["format"]})):
+        if record is None:
+            continue
+        if record.get("schema") != 1 or any(record.get(key) != value for key, value in identity.items()):
+            raise PackagingError("Unknown installation checkpoint; status cannot be verified")
+        for field in ("pending", "notices"):
+            messages = record.get(field, [])
+            if not isinstance(messages, list) or not all(isinstance(item, str) for item in messages):
+                raise PackagingError("Malformed installation checkpoint; status cannot be verified")
+    query_error = None
+    failure_error = None
+    try:
+        failure = native_failure(NATIVE_FAILURE)
+    except PackagingError as error:
+        failure, failure_error = None, str(error)
+    try:
+        package = installed(target["manager"], APP, details=True)
+    except PackagingError as error:
+        package, query_error = None, str(error)
+    agent_running = run(["systemctl", "--user", "is-active", AGENT], check=False).returncode == 0
+    engine_running = run(["systemctl", "is-active", ENGINE], check=False).returncode == 0
+    pending, notices = [], list((state or {}).get("notices", []))
+    headset = None
+    if package:
+        if failure_error:
+            pending.append("native-package: configuration outcome is unknown: " + failure_error)
+        elif failure:
+            pending.append("native-package: configure failed: " + failure["error"] if failure["status"] == "failed" else "native-package: configure has not completed")
+        if package["state"] != "installed":
+            pending.append("native-package: package configuration is incomplete (" + package["state"] + ")")
+        if state and state.get("status") not in ("removed", "not-installed"):
+            for message in state.get("pending", []):
+                # Older schema-1 records stored this conditional advice as a
+                # blocker. A fresh user probe, not that warning, decides readiness.
+                (notices if message == HEADSET_REPLUG_NOTICE else pending).append(message)
+            if state.get("status") == "failed":
+                pending.append("installer: previous system transaction failed: " + str(state.get("error", "inspect the system record")))
+        if checkpoint and (not engine_running or checkpoint.get("status") in ("failed", "removing", "remove-failed")):
+            pending += checkpoint.get("pending", [])
+            if checkpoint.get("status") in ("removing", "remove-failed"):
+                pending.append("native-package: removal checkpoint is incomplete")
+            if checkpoint.get("status") == "failed":
+                pending.append("native-package: failed native checkpoint: " + str(checkpoint.get("error", "inspect native record")))
+        if not agent_running:
+            pending.append("user-services: remapping agent is not active in this user's session")
+        if not engine_running:
+            pending.append("private-engine: system backend is not active")
+        headset = facts.get("headsetcontrol", {"configured": False, "reason": "System CLI is not installed", "user_access": "unknown"})
+        if not headset.get("configured") and HEADSET.is_file():
+            headset = probe_headset(HEADSET)
+        if not headset.get("configured"):
+            pending.append("headsetcontrol: no working CLI passes the verified API 1.6 contract: " + headset.get("reason", "probe failed"))
+        if failure_error:
+            status = "unknown"
+        elif failure and failure["status"] == "failed" or checkpoint and checkpoint.get("status") == "failed":
+            status = "failed"
+        else:
+            status = "pending" if pending else "running"
+    elif query_error:
+        status = "unknown"
+        pending.append("native-package: " + query_error)
+    elif engine_running:
+        status = "failed" if failure and failure["status"] == "failed" else "pending"
+        pending.append("private-engine: backend is still active although the native package is absent")
+    else:
+        status = "removed" if any(record and record.get("status") == "removed" for record in (state, checkpoint)) else "not-installed"
+    return {
+        "status": status, "package_installed": None if query_error else bool(package),
+        "package_version": package["version"] if package else None, "package_state": package["state"] if package else "unknown" if query_error else "not-installed",
+        "system_record": state, "native_record": checkpoint, "native_failure": failure, "native_failure_error": failure_error,
+        "user_agent_running": agent_running, "private_engine_running": engine_running,
+        "headsetcontrol": headset, "pending": list(dict.fromkeys(pending)), "notices": list(dict.fromkeys(notices)),
+    }
 
 
 def main():
@@ -348,27 +448,20 @@ def main():
         else:
             if sys.platform != "linux":
                 raise PackagingError("Use --dry-run --fixture on non-Linux hosts")
-            release = parse_os_release(regular_bytes("/etc/os-release", 65536).decode())
+            release = parse_os_release(regular_bytes(Path("/etc/os-release").resolve(), 65536).decode())
             target = target_for(release)
             facts = facts_for(target)
         target = target_for(release)
         preflight(target, facts, manifest if args.action != "status" else None)
         if args.action == "status" and not args.dry_run:
-            state = json_file(STATE) if STATE.exists() else {"status": "not-installed"}
-            agent_running = run(["systemctl", "--user", "is-active", AGENT], check=False).returncode == 0
-            engine_running = run(["systemctl", "is-active", ENGINE], check=False).returncode == 0
-            pending = list(state.get("pending", []))
-            if not facts.get("headsetcontrol", {}).get("configured"):
-                private = Path("/usr/lib/peripheral-hub/headsetcontrol")
-                if not private.is_file() or not probe_headset(private).get("configured"):
-                    pending.append("headsetcontrol: no CLI passes the unchanged API 1.8/1.9 contract")
-            observed = {"system_record": state, "user_agent_running": agent_running, "private_engine_running": engine_running, "pending": pending}
-            observed["status"] = "running" if state.get("status") == "running" and agent_running and engine_running and not pending else state.get("status", "not-installed") if state.get("status") in ("not-installed", "removed", "failed") else "pending"
+            observed = installation_status(target, facts)
+            observed.update(target=target["id"], host_os_release=release, compatible_host=release.get("ID") != target["os_id"])
             print(json.dumps(observed, indent=2, sort_keys=True))
             return 0 if observed["status"] == "running" else 2
         choices = choices_for(args, target, facts)
         package = str((args.bundle / manifest["package"]["file"]).resolve()) if manifest else f"peripheral-hub-0.1.0.{target['format']}"
         plan = system_plan(target, facts, choices, args.action, package)
+        plan.update(host_os_release=release, compatible_host=release.get("ID") != target["os_id"])
         plan["user_commands"] = user_commands(plan, facts, choices)
         plan["sources"] = load_targets()["sources"]
         if args.json:
@@ -382,6 +475,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="peripheral-hub-install-") as temporary:
             work = Path(temporary)
             key = None
+            key_checksum = None
             if plan["repository"]:
                 data = https_bytes(plan["repository"]["key_url"], 128 * 1024)
                 expected = load_targets()["repository_keys"][plan["repository"]["key"]]
@@ -389,7 +483,8 @@ def main():
                     raise PackagingError("Official repository key fingerprint mismatch; no system changes")
                 key = work / "repository.asc"
                 key.write_bytes(data)
-            request = {"schema": 1, "uid": os.geteuid(), "action": args.action, "target": target["id"], "choices": choices, "manifest_sha256": manifest_hash, "purge": args.purge, "yes": args.yes, "repository_key_sha256": digest(key.read_bytes()) if key else None}
+                key_checksum = digest(data)
+            request = {"schema": 1, "uid": os.geteuid(), "action": args.action, "target": target["id"], "choices": choices, "manifest_sha256": manifest_hash, "purge": args.purge, "yes": args.yes, "repository_key_sha256": key_checksum}
             write_json(work / "request.json", request, 0o600)
             if args.action == "uninstall":
                 for command in plan["user_commands"]:
@@ -407,7 +502,17 @@ def main():
             result = run(command, capture=False, timeout=3600, check=False)
             state = json_file(STATE) if STATE.exists() else {"status": "failed", "pending": ["System transaction failed before recording state"]}
             pending = list(dict.fromkeys([*plan["pending"], *state.get("pending", [])]))
+            headset = None
+            failure, failure_error = None, None
             if args.action != "uninstall" and state.get("package_installed"):
+                try:
+                    failure = native_failure(NATIVE_FAILURE)
+                except PackagingError as error:
+                    failure_error = str(error)
+                if failure or failure_error:
+                    pending.append("native-package: " + (failure_error or failure["error"] or "configure has not completed"))
+            failed = bool(result.returncode or state.get("status") == "failed" or failure_error or failure and failure["status"] == "failed")
+            if args.action != "uninstall" and not failed and not failure and state.get("package_installed"):
                 if choices.get("openrazer") and "plugdev" not in facts.get("groups", []) and not any(item.startswith("openrazer:") for item in plan["pending"]):
                     pending.append("openrazer: pending logout/login; plugdev is not effective in this session")
                 if not facts.get("session"):
@@ -423,18 +528,17 @@ def main():
                             pending.append(str(error))
                 cli = shutil.which("headsetcontrol")
                 headset = probe_headset(cli) if cli else {"configured": False}
-                private = Path("/usr/lib/peripheral-hub/headsetcontrol")
-                if not headset.get("configured") and private.is_file():
-                    headset = probe_headset(private)
+                if not headset.get("configured") and HEADSET.is_file():
+                    headset = probe_headset(HEADSET)
                 if not headset.get("configured"):
-                    pending.append("headsetcontrol: no verified CLI for the unchanged Rust API 1.8/1.9; component not configured")
-            summary = {"status": "failed" if result.returncode else "pending" if pending else "removed" if args.action == "uninstall" else "running", "pending": pending, "system": state}
+                    pending.append("headsetcontrol: no working CLI for verified API 1.6: " + headset.get("reason", "probe failed"))
+            summary = {"status": "failed" if failed else "pending" if pending else "removed" if args.action == "uninstall" else "running", "pending": pending, "notices": state.get("notices", []), "headsetcontrol": headset, "system": state, "native_failure": failure}
             state_home = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
             if not state_home.is_absolute():
                 raise PackagingError("XDG_STATE_HOME must be absolute")
             write_json(state_home / APP / "installer-status.json", summary, 0o600)
             print(json.dumps(summary, indent=2, sort_keys=True))
-            return 1 if result.returncode else 2 if pending else 0
+            return 1 if failed else 2 if pending else 0
     except (PackagingError, OSError, ValueError) as error:
         print(f"Installer error: {error}", file=sys.stderr)
         return 1

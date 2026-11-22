@@ -7,6 +7,7 @@ All output expressions are compiled from validated actions and trusted constants
 """
 
 import asyncio
+from collections import deque
 import ctypes
 import os
 import re
@@ -23,14 +24,17 @@ from inputremapper.injection.event_reader import EventReader
 from inputremapper.injection.global_uinputs import DEFAULT_UINPUTS, GlobalUInputs, UInput
 from inputremapper.injection.injector import Injector, InjectorCommand
 from inputremapper.injection.macros.parse import Parser
+from inputremapper.injection.macros.argument import ArgumentConfig
+from inputremapper.injection.macros.task import Task
 from inputremapper.injection.macros.tasks.hold_keys import HoldKeysTask
+from inputremapper.injection.mapping_handlers.key_handler import KeyHandler
 from inputremapper.injection.mapping_handlers.macro_handler import MacroHandler
 from inputremapper.injection.mapping_handlers.mapping_handler import HandlerEnums
 from inputremapper.injection.mapping_handlers.mapping_parser import MappingParser, mapping_handler_classes
 from inputremapper.input_event import InputEvent
 from inputremapper.utils import get_device_hash
 
-from inventory import LinuxDiscovery
+from inventory import LinuxDiscovery, SUPPORTED_SEAT
 from strict import EngineStatus, HeldKeys, STATES, StrictFailure, strict_grab
 from validation import BackendError, MOUSE_OUTPUT_CODES
 
@@ -85,6 +89,33 @@ class TrackedForward(evdev.UInput):
 
 
 class PrivateUInputs(GlobalUInputs):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.owners = {}
+
+    def write_owned(self, event, target_uinput, owner):
+        type_, code, value = event
+        if type_ != 1 or type(value) is not int or value not in (0, 1, 2):
+            raise StrictFailure("Managed bindings may only emit EV_KEY transitions")
+        identity = target_uinput, code
+        owners = self.owners.get(identity, set())
+        if value == 1:
+            if owner in owners:
+                return
+            if not owners:
+                self.write(event, target_uinput)
+            self.owners.setdefault(identity, set()).add(owner)
+        elif value == 0:
+            if owner not in owners:
+                return
+            if len(owners) == 1:
+                self.write(event, target_uinput)
+            owners.remove(owner)
+            if not owners:
+                del self.owners[identity]
+        elif owner in owners:
+            self.write(event, target_uinput)
+
     def write(self, event, target_uinput):
         output = self.get_uinput(target_uinput)
         if output is None or not output.can_emit(event):
@@ -95,14 +126,107 @@ class PrivateUInputs(GlobalUInputs):
             raise StrictFailure("Private output injection failed") from None
 
 
+class BindingUInputs:
+    """One upstream write(event, target) endpoint per binding, including its macro."""
+
+    def __init__(self, outputs):
+        self.outputs = outputs
+
+    def write(self, event, target_uinput):
+        self.outputs.write_owned(event, target_uinput, self)
+
+
+class PrivateKeyHandler(KeyHandler):
+    def __init__(self, combination, mapping, global_uinputs, **kwargs):
+        super().__init__(combination, mapping, BindingUInputs(global_uinputs), **kwargs)
+
+
 class PrivateMacroHandler(MacroHandler):
+    MAX_ACTIVATIONS = 32
+
+    def __init__(self, combination, mapping, global_uinputs, **kwargs):
+        super().__init__(combination, mapping, BindingUInputs(global_uinputs), **kwargs)
+        self._pending = deque()
+        self._release = None
+        self._running_release = None
+        self._runner = None
+        self._failed = False
+
+    def notify(self, event, *_, **__):
+        if self._failed:
+            raise StrictFailure("Private chord activation has failed")
+        if event.type == 1 and event.value == 2:
+            return True
+        if event.is_pressed():
+            if not self._active:
+                if len(self._pending) + (self._running_release is not None) >= self.MAX_ACTIVATIONS:
+                    self._failed = True
+                    self.reset()
+                    raise StrictFailure("Private chord activation backlog exceeded its bound")
+                self._active = True
+                self._release = asyncio.Event()
+                self._pending.append(self._release)
+                if self._runner is None:
+                    self._start_runner()
+        else:
+            self._active = False
+            release, self._release = self._release, None
+            if release is not None:
+                release.set()
+                if release is self._running_release:
+                    self._macro.release_trigger()
+        return True
+
+    def _start_runner(self):
+        self._runner = asyncio.ensure_future(self._run_activations())
+        self._runner.add_done_callback(self._runner_done)
+
+    def _runner_done(self, task):
+        if self._runner is not task:
+            return
+        self._runner = None
+        if not task.cancelled() and (error := task.exception()) is not None:
+            self._failed = True
+            try:
+                self.reset()
+            finally:
+                task.get_loop().call_exception_handler({"message": "Private chord activation failed", "exception": error, "task": task})
+            return
+        if self._pending:
+            self._start_runner()
+
+    async def _run_activations(self):
+        def handler(type_, code, value):
+            self._remember_pressed_keys((type_, code, value))
+            self.global_uinputs.write((type_, code, value), self.mapping.target_uinput)
+
+        try:
+            while self._pending:
+                release = self._pending.popleft()
+                self._running_release = release
+                # Rearm the upstream latch only after the previous run has exited.
+                # A tap released before its turn must still emit both transitions.
+                self._macro.press_trigger()
+                if release.is_set():
+                    self._macro.release_trigger()
+                await self.run_macro(handler)
+        finally:
+            self._running_release = None
+
     async def run_macro(self, handler):
         # Stock MacroHandler logs and swallows failures. Propagate to worker teardown.
         await self._macro.run(handler)
 
     def reset(self):
+        self._pending.clear()
+        if self._release is not None:
+            self._release.set()
+        self._release = None
         self._macro.release_trigger()
+        if self._runner is not None:
+            self._runner.cancel()
         super().reset()
+        self._pressed_keys.clear()
 
 
 class PrivateMappingParser(MappingParser):
@@ -120,8 +244,9 @@ class PrivateEventReader(EventReader):
         if event.type == 0 and event.code == 3:  # SYN_DROPPED
             raise StrictFailure("Kernel input events were dropped; private outputs require release")
         if event.type == 1 and event.value == 2 and not self.context.get_notify_callbacks(event):
-            self._forward_to.write(*event.event_tuple)
-            self._forward_to.syn()
+            forward_to = self.context.get_forward_uinput(self._device_hash)
+            forward_to.write(*event.event_tuple)
+            forward_to.syn()
             return
         await super().handle(event)
 
@@ -147,7 +272,7 @@ class ManagedGroup:
             for node in self.nodes:
                 source = evdev.InputDevice(node.raw.path)
                 devices.append(source)
-                if discovery.inspect(source) != node.raw:
+                if node.raw.seat != SUPPORTED_SEAT or discovery.inspect(source) != node.raw:
                     raise StrictFailure("An expected physical node changed before exclusive grab")
             return devices
         except Exception:
@@ -178,7 +303,18 @@ class ManagedInjector(Injector):
 
     def _grab_devices(self):
         sources = {node.id: device for node, device in zip(self.group.nodes, self._devices)}
-        return strict_grab(sources, self.validated.effective_bindings, get_device_hash)
+        expected = {node.id: node.raw for node in self.group.nodes}
+        discovery = LinuxDiscovery(evdev, get_device_hash)
+
+        def verify_source(node_id, device):
+            try:
+                verified = expected[node_id].seat == SUPPORTED_SEAT and discovery.inspect(device) == expected[node_id]
+            except Exception:
+                verified = False
+            if not verified:
+                raise StrictFailure("Physical identity or seat assignment changed before exclusive grab")
+
+        return strict_grab(sources, self.validated.effective_bindings, get_device_hash, verify_source)
 
     def stop_injecting(self):
         # Do not call the stock numlock decorator (xset/numlockx) in a root service.
@@ -359,13 +495,33 @@ class ManagedHandle:
     def __init__(self, injector):
         self.injector = injector
         self.closed_status = None
+        self.stop_requested = False
+
+    def start(self):
+        injector = self.injector
+        if self.closed_status is not None or injector.pid is not None:
+            raise RuntimeError("Private injector handle cannot be started twice")
+        injector.start()
+        injector._msg_pipe[0].close()
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            if self.status().state != "STARTING":
+                return
+            injector._msg_pipe[1].poll(0.05)
+        # The owning Backend still holds this handle even if cleanup cannot exit.
+        raise RuntimeError("Private injector startup timed out")
 
     def status(self):
-        return self.closed_status if self.closed_status is not None else self.injector.status()
+        if self.closed_status is not None:
+            return self.closed_status
+        if self.stop_requested:
+            return EngineStatus("FAILED", "Private injector shutdown could not be confirmed")
+        return self.injector.status()
 
     def stop(self):
         if self.closed_status is not None:
             return self.closed_status
+        self.stop_requested = True
         injector = self.injector
         if injector.is_alive():
             injector.stop_injecting()
@@ -379,10 +535,34 @@ class ManagedHandle:
         if injector.is_alive():
             raise RuntimeError("Private injector did not terminate")
         injector.status()
-        injector._msg_pipe[1].close()
+        for connection in injector._msg_pipe:
+            connection.close()
         injector.close()
         self.closed_status = EngineStatus("STOPPED")
         return self.closed_status
+
+
+class AutoclickTask(Task):
+    argument_configs = [
+        ArgumentConfig(name="cps", position=0, types=[int, float]),
+        ArgumentConfig(name="button", position=1, types=[int], default=272),
+    ]
+
+    async def run(self, callback) -> None:
+        cps = max(1.0, min(100.0, float(self.get_argument("cps").get_value())))
+        button = int(self.get_argument("button").get_value())
+        period = 1.0 / cps
+        press_time = max(0.005, min(0.025, period * 0.3))
+        release_time = max(0.005, period - press_time)
+        while self.is_holding():
+            callback(1, button, 1)
+            start = asyncio.get_event_loop().time()
+            while self.is_holding() and (asyncio.get_event_loop().time() - start) < press_time:
+                await asyncio.sleep(min(0.005, press_time))
+            callback(1, button, 0)
+            start = asyncio.get_event_loop().time()
+            while self.is_holding() and (asyncio.get_event_loop().time() - start) < release_time:
+                await asyncio.sleep(min(0.005, release_time))
 
 
 class PrivateEngine:
@@ -399,8 +579,9 @@ class PrivateEngine:
                 self.key_names.setdefault(code, name)
         if set(self.key_names) != self.keyboard_codes:
             raise RuntimeError("Pinned numeric keyboard outputs have no trusted kernel constants")
-        Parser.TASK_CLASSES = {"hold_keys": HoldKeysTask}
+        Parser.TASK_CLASSES = {"hold_keys": HoldKeysTask, "autoclick": AutoclickTask}
         mapping_handler_classes[HandlerEnums.macro] = PrivateMacroHandler
+        mapping_handler_classes[HandlerEnums.key] = PrivateKeyHandler
 
     def compile(self, mouse, validated):
         if validated.fingerprint != mouse.fingerprint:
@@ -417,30 +598,14 @@ class PrivateEngine:
             elif output.kind == "chord":
                 names = [self.key_names[code] for code in (*output.modifiers, output.key)]
                 options["output_symbol"] = "hold_keys(" + ",".join(names) + ")"
+            elif output.kind == "autoclicker":
+                options["target_uinput"] = "mouse"
+                options["output_symbol"] = f"autoclick({output.cps},{output.button})"
             else:
                 raise BackendError("InvalidPreset", "Only validated, managed actions can be compiled")
             preset.add(Mapping(**options))
         return preset
 
-    def start(self, mouse, compiled, validated):
+    def create_handle(self, mouse, compiled, validated):
         injector = ManagedInjector(mouse, compiled, validated, getattr(self, "inherited_fds", ()))
-        handle = ManagedHandle(injector)
-        try:
-            injector.start()
-            injector._msg_pipe[0].close()
-            deadline = time.monotonic() + 4
-            while time.monotonic() < deadline:
-                status = handle.status()
-                if status.state != "STARTING":
-                    return handle
-                injector._msg_pipe[1].poll(0.05)
-            handle.stop()
-            handle.closed_status = EngineStatus("FAILED", "Private injector startup timed out; its devices were released")
-            return handle
-        except Exception:
-            if injector.pid is not None:
-                handle.stop()
-            else:
-                for connection in injector._msg_pipe:
-                    connection.close()
-            raise
+        return ManagedHandle(injector)

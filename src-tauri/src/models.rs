@@ -248,7 +248,16 @@ pub enum MouseAction {
     MouseButton { code: u16 },
     Key { code: u16 },
     Chord { modifiers: Vec<u16>, key: u16 },
+    Autoclicker {
+        cps: u32,
+        #[serde(default = "default_autoclick_button")]
+        button: u16,
+    },
     Disabled,
+}
+
+fn default_autoclick_button() -> u16 {
+    272
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

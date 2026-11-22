@@ -1,0 +1,14 @@
+{
+  "test_only": true,
+  "os": "Pop!_OS 24.04",
+  "version": "1.6.8-1pop1~1787688714~24.04~fdff050",
+  "metadata_url": "https://apt.pop-os.org/release/dists/noble/main/binary-amd64/Packages",
+  "metadata_sha256": "bb9acad2acbdc5c8a6c4f26d16807a93520f8b9ec5563235670292afb9d3da43",
+  "base_url": "https://apt.pop-os.org/release/pool/noble/pipewire/fdff0508554867415a86414159515e92445d07c5/",
+  "packages": [
+    { "file": "libpipewire-0.3-0t64_1.6.8-1pop1~1787688714~24.04~fdff050_amd64.deb", "size": 374450, "sha256": "16ebea2dc0fb3111d0d30019465e0a948744217ff7e3ee44fdd9bcfb595c319c" },
+    { "file": "libpipewire-0.3-modules_1.6.8-1pop1~1787688714~24.04~fdff050_amd64.deb", "size": 1098030, "sha256": "4326e735dad541ed9d3943afc7bf733ede7d657757c4e9bba47711baf41ab5c5" },
+    { "file": "libspa-0.2-modules_1.6.8-1pop1~1787688714~24.04~fdff050_amd64.deb", "size": 1463202, "sha256": "abac437b3a430de833a2b75be4c25c7d8a87725db106d0e124fb46ba20ab260d" },
+    { "file": "pipewire-bin_1.6.8-1pop1~1787688714~24.04~fdff050_amd64.deb", "size": 824708, "sha256": "097df73f0ae1f5e55c12223baebd3c25a8be90932658978d394b67a21c1dada8" }
+  ]
+}

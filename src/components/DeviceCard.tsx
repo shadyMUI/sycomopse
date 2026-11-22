@@ -1,8 +1,8 @@
-import { useId } from "react";
+import { memo, useId } from "react";
 import type { Device, DeviceKind } from "../types";
 import { BatteryReadout, deviceStatus, providerNames } from "./Controls";
 
-export function DeviceIllustration({ kind, className = "" }: { kind: DeviceKind; className?: string }) {
+export const DeviceIllustration = memo(function DeviceIllustration({ kind, className = "" }: { kind: DeviceKind; className?: string }) {
   const id = useId().replaceAll(":", "");
   const mouse = kind === "mouse";
   return (
@@ -42,20 +42,20 @@ export function DeviceIllustration({ kind, className = "" }: { kind: DeviceKind;
       )}
     </svg>
   );
-}
+});
 
-export function DeviceCard({ device, selected, onOpen }: { device: Device; selected: boolean; onOpen: (device: Device) => void }) {
+export const DeviceCard = memo(function DeviceCard({ device, selected, onOpen }: { device: Device; selected: boolean; onOpen: (device: Device) => void }) {
   const status = deviceStatus(device);
   const actionable = device.kind === "mouse" || device.kind === "headset";
-  const brand = device.brand === "razer" ? "Razer" : device.brand === "logitech" ? "Logitech" : "Periferica";
+  const brand = device.brand === "razer" ? "Razer" : device.brand === "logitech" ? "Logitech" : "Peripheral";
   return (
     <article className={`device-card${selected ? " selected" : ""}`} data-testid="device-card">
-      <button type="button" className="device-card-button" aria-label={`Apri controlli di ${device.name}`} disabled={!actionable} onClick={() => onOpen(device)}>
-        <div className="device-card-top"><span className="tiny-label">{brand} / {device.kind === "mouse" ? "Mouse" : device.kind === "headset" ? "Cuffie" : "Ricevitore"}</span><span className={`status-dot ${status.tone}`} aria-hidden="true" /></div>
+      <button type="button" className="device-card-button" aria-label={`Open controls for ${device.name}`} disabled={!actionable} onClick={() => onOpen(device)}>
+        <span className="device-card-top"><span className="tiny-label">{brand} / {device.kind === "mouse" ? "Mouse" : device.kind === "headset" ? "Headset" : "Receiver"}</span><span className={`status-dot ${status.tone}`} aria-hidden="true" /></span>
         <DeviceIllustration kind={device.kind} />
-        <div className="device-card-copy"><h3>{device.name}</h3><span className={`status-pill ${status.tone}`}>{status.label}</span><p>{providerNames[device.provider]}{device.identity.transport ? ` / ${device.identity.transport}` : ""}</p></div>
-        <div className="device-card-bottom"><BatteryReadout battery={device.values.battery} compact /><span className="card-arrow" aria-hidden="true">{actionable ? ">" : ""}</span></div>
+        <span className="device-card-copy"><strong className="device-card-title">{device.name}</strong><span className={`status-pill ${status.tone}`}>{status.label}</span><span className="device-card-sub">{providerNames[device.provider]}{device.identity.transport ? ` / ${device.identity.transport}` : ""}</span></span>
+        <span className="device-card-bottom"><BatteryReadout battery={device.values.battery} compact /><span className="card-arrow" aria-hidden="true">{actionable ? ">" : ""}</span></span>
       </button>
     </article>
   );
-}
+});

@@ -1,8 +1,14 @@
 import type { MouseAction, MouseBinding, RemappingCapability } from "./types";
 
 export const mouseButtonNames: Record<number, string> = {
-  272: "Clic sinistro", 273: "Clic destro", 274: "Clic centrale", 275: "Laterale",
-  276: "Laterale extra", 277: "Avanti", 278: "Indietro", 279: "Task",
+  272: "Left Click",
+  273: "Right Click",
+  274: "Middle Click",
+  275: "Side Button",
+  276: "Extra Side Button",
+  277: "Forward",
+  278: "Back",
+  279: "Task",
 };
 
 export const modifierGroups = [
@@ -32,67 +38,117 @@ export const keyboardCodes: Readonly<Record<string, number>> = {
 };
 
 export const mediaKeyNames: Record<number, string> = {
-  113: "Silenzia audio", 114: "Volume giu", 115: "Volume su", 163: "Traccia successiva",
-  164: "Riproduci / pausa", 165: "Traccia precedente", 166: "Stop", 168: "Riavvolgi",
-  200: "Riproduci CD", 201: "Pausa CD", 207: "Riproduci", 208: "Avanti veloce", 226: "Apri lettore multimediale",
+  113: "Mute Audio",
+  114: "Volume Down",
+  115: "Volume Up",
+  163: "Next Track",
+  164: "Play / Pause",
+  165: "Previous Track",
+  166: "Stop",
+  168: "Rewind",
+  200: "Play CD",
+  201: "Pause CD",
+  207: "Play",
+  208: "Fast Forward",
+  226: "Open Media Player",
 };
 
-export function isMouseButtonCode(code: number): boolean { return code >= 272 && code <= 279; }
-export function isModifierCode(code: number): boolean { return modifierGroups.some((group) => group.codes.some((entry) => entry === code)); }
+export function isMouseButtonCode(code: number): boolean {
+  return code >= 272 && code <= 279;
+}
+export function isModifierCode(code: number): boolean {
+  return modifierGroups.some((group) => group.codes.some((entry) => entry === code));
+}
 
 export function keyCodeLabel(code: number): string {
   if (mouseButtonNames[code]) return mouseButtonNames[code];
   if (mediaKeyNames[code]) return mediaKeyNames[code];
   const modifier = modifierGroups.find((group) => group.codes.some((entry) => entry === code));
-  if (modifier) return `${modifier.label} ${modifier.codes[0] === code ? "sinistro" : "destro"}`;
+  if (modifier) return `${modifier.label} ${modifier.codes[0] === code ? "Left" : "Right"}`;
   const name = Object.entries(keyboardCodes).find(([, value]) => value === code)?.[0];
-  return name ? name.replace(/^(Key|Digit)/, "") : `Codice Linux ${code}`;
+  return name ? name.replace(/^(Key|Digit)/, "") : `Linux code ${code}`;
 }
 
 export function mouseActionLabel(action: MouseAction): string {
   switch (action.kind) {
-    case "default": return "Predefinito (passaggio originale)";
-    case "disabled": return "Disabilitato";
-    case "mouseButton": return keyCodeLabel(action.code);
-    case "key": return keyCodeLabel(action.code);
-    case "chord": return [...action.modifiers.map(keyCodeLabel), keyCodeLabel(action.key)].join(" + ");
+    case "default":
+      return "Default (pass-through)";
+    case "disabled":
+      return "Disabled";
+    case "mouseButton":
+      return keyCodeLabel(action.code);
+    case "key":
+      return keyCodeLabel(action.code);
+    case "chord":
+      return [...action.modifiers.map(keyCodeLabel), keyCodeLabel(action.key)].join(" + ");
+    case "autoclicker":
+      return `Autoclicker (${action.cps} CPS - ${keyCodeLabel(action.button ?? 272)})`;
   }
 }
 
-export function remappingProblem(capability: RemappingCapability | null, bindings: MouseBinding[], autoApply: boolean, allowWeakIdentity: boolean): string | null {
-  if (!capability || capability.availability !== "available" || !capability.writable) return capability?.reason || "Rimappatura non disponibile in scrittura.";
-  if (!capability.fingerprint || !capability.identityStrength) return "Identita del mouse non verificata: nessuna rimappatura viene applicata.";
-  if (capability.buttons.length === 0) return "Nessun pulsante rilevato: nessuna sorgente viene presunta.";
-  if (!Array.isArray(bindings) || bindings.length > capability.buttons.length) return "Elenco di pulsanti non valido.";
+export function remappingProblem(
+  capability: RemappingCapability | null,
+  bindings: MouseBinding[],
+  autoApply: boolean,
+  allowWeakIdentity: boolean
+): string | null {
+  if (!capability || capability.availability !== "available" || !capability.writable)
+    return capability?.reason || "Remapping is not writable.";
+  if (!capability.fingerprint || !capability.identityStrength)
+    return "Mouse identity not verified: no remapping applied.";
+  if (capability.buttons.length === 0) return "No buttons detected: no sources assumed.";
+  if (!Array.isArray(bindings) || bindings.length > capability.buttons.length)
+    return "Invalid button list.";
   const ids = new Set<string>();
   const allowed = (code: number) => Number.isInteger(code) && code > 0 && capability.keyCodes.includes(code);
   for (const binding of bindings) {
-    if (!binding || !capability.buttons.some((button) => button.id === binding.buttonId) || ids.has(binding.buttonId)) return "La bozza contiene pulsanti non rilevati o duplicati.";
+    if (!binding || !capability.buttons.some((button) => button.id === binding.buttonId) || ids.has(binding.buttonId))
+      return "Draft contains undetected or duplicate buttons.";
     ids.add(binding.buttonId);
     const action = binding.action;
-    if (!action) return "Azione non valida.";
+    if (!action) return "Invalid action.";
     switch (action.kind) {
-      case "default": case "disabled": break;
+      case "default":
+      case "disabled":
+        break;
       case "mouseButton":
-        if (!allowed(action.code) || !isMouseButtonCode(action.code)) return "Scegli un clic presente nei target consentiti dal provider.";
+        if (!allowed(action.code) || !isMouseButtonCode(action.code))
+          return "Choose a mouse click allowed by the provider.";
         break;
       case "key":
-        if (!allowed(action.code) || isMouseButtonCode(action.code)) return "Scegli un tasto presente nei target consentiti dal provider.";
+        if (!allowed(action.code) || isMouseButtonCode(action.code))
+          return "Choose a key allowed by the provider.";
         break;
       case "chord":
-        if (!allowed(action.key) || isMouseButtonCode(action.key) || isModifierCode(action.key)
-          || !Array.isArray(action.modifiers) || action.modifiers.length === 0 || action.modifiers.length > 4
-          || new Set(action.modifiers).size !== action.modifiers.length
-          || action.modifiers.some((code) => !allowed(code) || !isModifierCode(code))) return "La scorciatoia richiede modificatori consentiti e un solo tasto principale valido.";
+        if (
+          !allowed(action.key) ||
+          isMouseButtonCode(action.key) ||
+          isModifierCode(action.key) ||
+          !Array.isArray(action.modifiers) ||
+          action.modifiers.length === 0 ||
+          action.modifiers.length > 4 ||
+          new Set(action.modifiers).size !== action.modifiers.length ||
+          action.modifiers.some((code) => !allowed(code) || !isModifierCode(code))
+        )
+          return "Shortcut requires allowed modifiers and a single valid key.";
         break;
-      default: return "Azione non supportata: macro e sequenze libere non sono consentite.";
+      case "autoclicker":
+        if (!Number.isInteger(action.cps) || action.cps < 1 || action.cps > 100)
+          return "Autoclicker rate must be between 1 and 100 clicks per second (CPS).";
+        if (action.button !== undefined && (!allowed(action.button) || !isMouseButtonCode(action.button)))
+          return "Autoclicker button must be a valid mouse button.";
+        break;
+      default:
+        return "Unsupported action: free macros and timed sequences are not allowed.";
     }
   }
   const hasLeftClick = capability.buttons.some((button) => {
     const action = bindings.find((binding) => binding.buttonId === button.id)?.action;
-    return (!action || action.kind === "default") && button.code === 272 || action?.kind === "mouseButton" && action.code === 272;
+    return (!action || action.kind === "default") && button.code === 272 || (action?.kind === "mouseButton" && action.code === 272);
   });
-  if (!hasLeftClick) return "Mantieni almeno una via al clic sinistro: lascia il pulsante originale o assegna un altro pulsante al clic sinistro.";
-  if (autoApply && capability.identityStrength === "port" && !allowWeakIdentity) return "La riattivazione automatica per un'identita debole richiede il consenso esplicito per questa porta.";
+  if (!hasLeftClick)
+    return "Keep at least one way to left-click: leave the original button or assign another button to left click.";
+  if (autoApply && capability.identityStrength === "port" && !allowWeakIdentity)
+    return "Automatic reactivation for weak identity requires explicit consent for this port.";
   return null;
 }

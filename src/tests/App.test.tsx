@@ -30,35 +30,35 @@ function controlledApi(initial: Snapshot) {
 
 async function dashboard(api: HubApi) {
   render(<App api={api} />);
-  await screen.findByRole("heading", { name: /Il tuo setup/ });
+  await screen.findByRole("heading", { name: /(?:Your setup|Il tuo setup)/ });
 }
 
 describe("dashboard dinamica e confine demo", () => {
   it.each([0, 1, 3, 5])("mostra esattamente %i card dall'array, senza dispositivi hardcoded", async (count) => {
     await dashboard(createDemoApi(count));
     expect(screen.queryAllByTestId("device-card")).toHaveLength(count);
-    expect(screen.getByText("Demo / nessun hardware collegato")).toBeVisible();
-    if (count === 0) expect(screen.getByRole("heading", { name: "Nessun dispositivo rilevato" })).toBeVisible();
+    expect(screen.getByText(/(?:Demo \/ no hardware connected|Demo \/ nessun hardware collegato)/)).toBeVisible();
+    if (count === 0) expect(screen.getByRole("heading", { name: /(?:No devices detected|Nessun dispositivo rilevato)/ })).toBeVisible();
   });
 
   it("mantiene il badge demo in tutte le viste e naviga a tastiera", async () => {
     const user = userEvent.setup();
     await dashboard(createDemoApi());
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    expect(screen.getByText("Demo / nessun hardware collegato")).toBeVisible();
+    expect(screen.getByText(/(?:Demo \/ no hardware connected|Demo \/ nessun hardware collegato)/)).toBeVisible();
     await user.keyboard("{ArrowRight}");
     expect(screen.getByRole("tab", { name: /Audio/ })).toHaveFocus();
     expect(screen.getByRole("tab", { name: /Audio/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Demo / nessun hardware collegato")).toBeVisible();
+    expect(screen.getByText(/(?:Demo \/ no hardware connected|Demo \/ nessun hardware collegato)/)).toBeVisible();
     await user.keyboard("{Home}");
-    expect(screen.getByRole("tab", { name: /Panoramica/ })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: /(?:Dashboard|Panoramica)/ })).toHaveFocus();
   });
 
   it("nel browser normale mostra il backend mancante e mai un fallback demo", async () => {
     await dashboard(createTauriApi());
-    expect(screen.getByRole("heading", { name: "Piattaforma non supportata" })).toBeVisible();
-    expect(screen.getByText("Backend non disponibile")).toBeVisible();
-    expect(screen.queryByText("Demo / nessun hardware collegato")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /(?:Unsupported platform|Piattaforma non supportata)/ })).toBeVisible();
+    expect(screen.getAllByText(/(?:Backend unavailable|Backend non disponibile)/)[0]).toBeVisible();
+    expect(screen.queryByText(/(?:Demo \/ no hardware connected|Demo \/ nessun hardware collegato)/)).not.toBeInTheDocument();
     expect(screen.queryAllByTestId("device-card")).toHaveLength(0);
     expect(screen.getByRole("switch", { name: "Surround 7.1" })).toBeDisabled();
   });
@@ -68,11 +68,11 @@ describe("dashboard dinamica e confine demo", () => {
     const api = createDemoApi();
     const setOutput = vi.spyOn(api, "setDefaultOutput");
     await dashboard(api);
-    await user.click(screen.getByRole("button", { name: "Apri controlli di Razer BlackShark V3 X HyperSpeed" }));
+    await user.click(screen.getByRole("button", { name: /(?:Open controls for|Apri controlli di) Razer BlackShark V3 X HyperSpeed/ }));
     expect(screen.getByRole("tab", { name: /Audio/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: /Audio/ })).toHaveFocus();
-    expect(screen.getByText("Supporto parziale")).toBeVisible();
-    expect(screen.getByText("Batteria non esposta")).toBeVisible();
+    expect(screen.getByText(/(?:Partial support|Supporto parziale)/)).toBeVisible();
+    expect(screen.getByText(/(?:Battery not exposed|Batteria non esposta)/)).toBeVisible();
     expect(screen.queryByText("78%")).not.toBeInTheDocument();
     expect(setOutput).not.toHaveBeenCalled();
   });
@@ -86,19 +86,19 @@ describe("controlli mouse e readback", () => {
     const setRate = vi.spyOn(api, "setPollingRate");
     await dashboard(api);
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    const manual = screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ });
     fireEvent.change(manual, { target: { value } });
     expect(manual).toHaveValue(value);
     expect(manual).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "Collega assi X/Y" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: /(?:Link X\/Y axes|Collega assi X\/Y)/ })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /500\s*Hz/ }));
-    expect(screen.getByRole("button", { name: "Applica polling" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /(?:Apply polling|Applica polling)/ })).toBeEnabled();
     expect(setDpi).not.toHaveBeenCalled();
     expect(setRate).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Applica polling" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply polling|Applica polling)/ }));
     expect(setRate).toHaveBeenCalledWith("demo-viper-1", 500);
     expect(manual).toHaveValue(value);
     expect(screen.getByText("800 DPI", { selector: "strong" })).toBeVisible();
@@ -109,23 +109,23 @@ describe("controlli mouse e readback", () => {
     const api = createDemoApi(1);
     const setDpi = vi.spyOn(api, "setDpi");
     await dashboard(api);
-    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    const manual = screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ });
     expect(manual).toHaveValue("800");
     await user.clear(manual);
     await user.type(manual, "1200");
-    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("1200");
+    expect(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).toHaveValue("1200");
     expect(setDpi).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByRole("slider", { name: "DPI desiderati" }), { target: { value: "1600" } });
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ }), { target: { value: "1600" } });
     expect(manual).toHaveValue("1600");
-    await user.click(screen.getByRole("button", { name: "Ripristina bozza" }));
+    await user.click(screen.getByRole("button", { name: /(?:Reset draft|Ripristina bozza)/ }));
     expect(manual).toHaveValue("800");
     await user.clear(manual);
     await user.type(manual, "1200");
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenCalledWith("demo-viper-1", 1200, 1200);
     await waitFor(() => expect(screen.getByText("1200 DPI", { selector: "strong" })).toBeVisible());
     expect(manual).toHaveValue("1200");
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
   });
 
   it("conserva la bozza manuale discreta fuori elenco e accetta soltanto i valori esposti", async () => {
@@ -133,18 +133,18 @@ describe("controlli mouse e readback", () => {
     const api = createDemoApi();
     const setDpi = vi.spyOn(api, "setDpi");
     await dashboard(api);
-    await user.selectOptions(screen.getByLabelText("Mouse dei controlli rapidi"), "demo-g305-1");
-    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    await user.selectOptions(screen.getByLabelText(/(?:Quick controls mouse|Mouse dei controlli rapidi)/), "demo-g305-1");
+    const manual = screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ });
     await user.clear(manual);
     await user.type(manual, "1500");
     expect(manual).toHaveValue("1500");
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Scegli DPI desiderati" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /(?:Choose Target DPI|Scegli DPI desiderati)/ })).toBeVisible();
     await user.clear(manual);
     await user.type(manual, "3200");
-    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("3");
+    expect(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).toHaveValue("3");
     expect(setDpi).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenCalledWith("demo-g305-1", 3200, 3200);
   });
 
@@ -154,26 +154,26 @@ describe("controlli mouse e readback", () => {
     const setDpi = vi.spyOn(api, "setDpi");
     await dashboard(api);
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    await user.click(screen.getByRole("switch", { name: "Collega assi X/Y" }));
-    const x = screen.getByRole("textbox", { name: "DPI X manuali" });
-    const y = screen.getByRole("textbox", { name: "DPI Y manuali" });
+    await user.click(screen.getByRole("switch", { name: /(?:Link X\/Y axes|Collega assi X\/Y)/ }));
+    const x = screen.getByRole("textbox", { name: /(?:Manual X DPI|DPI X manuali)/ });
+    const y = screen.getByRole("textbox", { name: /(?:Manual Y DPI|DPI Y manuali)/ });
     fireEvent.change(x, { target: { value: "1200" } });
     fireEvent.change(y, { target: { value: "" } });
     expect(x).toHaveValue("1200");
     expect(y).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Ripristina bozza" }));
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /(?:Reset draft|Ripristina bozza)/ }));
     expect(x).toHaveValue("800");
     expect(y).toHaveValue("800");
     fireEvent.change(x, { target: { value: "1200" } });
     fireEvent.change(y, { target: { value: "1600" } });
     expect(setDpi).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenCalledWith("demo-viper-1", 1200, 1600);
     await waitFor(() => expect(screen.getByText("X 1200 / Y 1600 DPI", { selector: "strong" })).toBeVisible());
-    await user.click(screen.getByRole("switch", { name: "Collega assi X/Y" }));
-    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveValue("1200");
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    await user.click(screen.getByRole("switch", { name: /(?:Link X\/Y axes|Collega assi X\/Y)/ }));
+    expect(screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ })).toHaveValue("1200");
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenLastCalledWith("demo-viper-1", 1200, 1200);
   });
 
@@ -182,17 +182,17 @@ describe("controlli mouse e readback", () => {
     const initial = await createDemoApi().getSnapshot();
     const { api, emit } = controlledApi(initial);
     await dashboard(api);
-    const manual = screen.getByRole("textbox", { name: "DPI manuali" });
+    const manual = screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ });
     fireEvent.change(manual, { target: { value: "bad" } });
     const next = clone(initial);
     next.revision = 2;
     next.devices[0].values.dpi = { x: 1800, y: 1800 };
     act(() => emit(next));
     expect(manual).toHaveValue("1800");
-    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("1800");
+    expect(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).toHaveValue("1800");
     fireEvent.change(manual, { target: { value: "" } });
-    await user.selectOptions(screen.getByLabelText("Mouse dei controlli rapidi"), "demo-g305-1");
-    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveValue("1600");
+    await user.selectOptions(screen.getByLabelText(/(?:Quick controls mouse|Mouse dei controlli rapidi)/), "demo-g305-1");
+    expect(screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ })).toHaveValue("1600");
   });
 
   it("azzera la bozza cambiando mouse e applica DPI discreti per posizione, non per range", async () => {
@@ -201,28 +201,28 @@ describe("controlli mouse e readback", () => {
     const setDpi = vi.spyOn(api, "setDpi");
     const setRate = vi.spyOn(api, "setPollingRate");
     await dashboard(api);
-    await user.click(screen.getByRole("button", { name: "Apri controlli di Razer Viper V3 HyperSpeed" }));
-    const viperSlider = screen.getByRole("slider", { name: "DPI desiderati" });
+    await user.click(screen.getByRole("button", { name: /(?:Open controls for|Apri controlli di) Razer Viper V3 HyperSpeed/ }));
+    const viperSlider = screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ });
     fireEvent.change(viperSlider, { target: { value: "1200" } });
     expect(setDpi).not.toHaveBeenCalled();
-    await user.selectOptions(screen.getByLabelText("Mouse selezionato"), "demo-g305-1");
-    const slider = screen.getByRole("slider", { name: "DPI desiderati" });
+    await user.selectOptions(screen.getByLabelText(/(?:Selected mouse|Mouse selezionato)/), "demo-g305-1");
+    const slider = screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ });
     expect(slider).toHaveValue("2");
     expect(slider).toHaveAttribute("min", "0");
     expect(slider).toHaveAttribute("max", "5");
     expect(slider).toHaveAttribute("aria-valuetext", "1600 DPI");
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
     fireEvent.change(slider, { target: { value: "3" } });
     expect(slider).toHaveAttribute("aria-valuetext", "3200 DPI");
     expect(setDpi).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenCalledWith("demo-g305-1", 3200, 3200);
     await waitFor(() => expect(screen.getByText("3200 DPI", { selector: "strong" })).toBeVisible());
     await user.click(screen.getByRole("button", { name: /250\s*Hz/ }));
     expect(setRate).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Applica polling" }));
+    await user.click(screen.getByRole("button", { name: /(?:Apply polling|Applica polling)/ }));
     expect(setRate).toHaveBeenCalledWith("demo-g305-1", 250);
-    expect(screen.queryByRole("switch", { name: "Collega assi X/Y" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /(?:Link X\/Y axes|Collega assi X\/Y)/ })).not.toBeInTheDocument();
   });
 
   it("collega X/Y inizialmente e li separa solo quando il provider lo supporta", async () => {
@@ -231,12 +231,12 @@ describe("controlli mouse e readback", () => {
     const setDpi = vi.spyOn(api, "setDpi");
     await dashboard(api);
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    const link = screen.getByRole("switch", { name: "Collega assi X/Y" });
+    const link = screen.getByRole("switch", { name: /(?:Link X\/Y axes|Collega assi X\/Y)/ });
     expect(link).toBeChecked();
     await user.click(link);
-    fireEvent.change(screen.getByRole("slider", { name: "DPI X desiderati" }), { target: { value: "1200" } });
-    fireEvent.change(screen.getByRole("slider", { name: "DPI Y desiderati" }), { target: { value: "1600" } });
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target X DPI|DPI X desiderati)/ }), { target: { value: "1200" } });
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target Y DPI|DPI Y desiderati)/ }), { target: { value: "1600" } });
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenCalledWith("demo-viper-1", 1200, 1600);
   });
 
@@ -247,13 +247,13 @@ describe("controlli mouse e readback", () => {
     const { api } = controlledApi(initial);
     const setDpi = vi.spyOn(api, "setDpi");
     await dashboard(api);
-    await user.selectOptions(screen.getByLabelText("Mouse dei controlli rapidi"), "demo-g305-1");
-    expect(screen.queryByRole("slider", { name: "DPI desiderati" })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(/(?:Quick controls mouse|Mouse dei controlli rapidi)/), "demo-g305-1");
+    expect(screen.queryByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).not.toBeInTheDocument();
     expect(screen.getByText("1500 DPI", { selector: "strong" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Scegli DPI desiderati" }), "3200");
-    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("3");
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: /(?:Choose Target DPI|Scegli DPI desiderati)/ }), "3200");
+    expect(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).toHaveValue("3");
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     expect(setDpi).toHaveBeenCalledWith("demo-g305-1", 3200, 3200);
   });
 
@@ -267,14 +267,14 @@ describe("controlli mouse e readback", () => {
     initial.diagnostics[0] = { ...initial.diagnostics[0], code: "providerMissing", severity: "warning", message: "OpenRazer non attivo." };
     const { api } = controlledApi(initial);
     await dashboard(api);
-    expect(screen.getAllByText("Provider assente")[0]).toBeVisible();
+    expect(screen.getAllByText(/(?:Provider missing|Provider assente)/)[0]).toBeVisible();
     expect(screen.getByRole("switch", { name: "Surround 7.1" })).toBeEnabled();
-    await user.click(screen.getByLabelText("Servizi e diagnostica"));
+    await user.click(screen.getByLabelText(/(?:Services & Diagnostics|Servizi e diagnostica)/));
     expect(screen.getByText("OpenRazer non attivo.", { selector: ".diagnostic-item p" })).toBeVisible();
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
-    expect(screen.getByText("Batteria non esposta")).toBeVisible();
+    expect(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
+    expect(screen.getByText(/(?:Battery not exposed|Batteria non esposta)/)).toBeVisible();
     expect(screen.queryByText("In carica")).not.toBeInTheDocument();
   });
 
@@ -285,10 +285,10 @@ describe("controlli mouse e readback", () => {
     initial.devices[0].values.battery = { percentage: null, level: "low", charging: null, source: "upower", observedAt: now, sourceUpdatedAt: now - 900, stale: true };
     await dashboard(controlledApi(initial).api);
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    expect(screen.getByText("Basso")).toBeVisible();
-    expect(screen.getByText("Livello approssimativo")).toBeVisible();
-    expect(screen.getByText("Dato precedente")).toBeVisible();
-    expect(screen.getByText("Fonte: UPower")).toBeVisible();
+    expect(screen.getByText(/(?:Low|Basso)/)).toBeVisible();
+    expect(screen.getByText(/(?:Approximate level|Livello approssimativo)/)).toBeVisible();
+    expect(screen.getByText(/(?:Previous reading|Dato precedente)/)).toBeVisible();
+    expect(screen.getByText(/(?:Source: UPower|Fonte: UPower)/)).toBeVisible();
     expect(screen.getByText(new Date((now - 900) * 1000).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }))).toBeVisible();
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
     expect(screen.queryByText("25%")).not.toBeInTheDocument();
@@ -300,9 +300,9 @@ describe("controlli mouse e readback", () => {
     const getSnapshot = vi.spyOn(api, "getSnapshot");
     vi.spyOn(api, "setDpi").mockRejectedValue({ code: "writeFailed", message: "Scrittura DPI non confermata.", detail: null });
     await dashboard(api);
-    fireEvent.change(screen.getByRole("slider", { name: "DPI desiderati" }), { target: { value: "1200" } });
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
-    await screen.findByRole("alert");
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ }), { target: { value: "1200" } });
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
+    await screen.findByRole("alert", {}, { timeout: 3000 });
     expect(screen.getByText("800 DPI", { selector: "strong" })).toBeVisible();
     expect(getSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -313,7 +313,7 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const user = userEvent.setup();
     await dashboard(api);
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    return { user, panel: within(screen.getByRole("region", { name: /Pulsanti rilevati/ })) };
+    return { user, panel: within(screen.getByRole("region", { name: /(?:Detected buttons|Pulsanti rilevati)/ })) };
   }
 
   it("rimappa un mouse generico senza DPI scrivibili e usa solo sorgenti e target rilevati", async () => {
@@ -338,46 +338,46 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const apply = vi.spyOn(api, "applyMouseRemapping").mockResolvedValue(result);
     const setDpi = vi.spyOn(api, "setDpi");
     const { user, panel } = await buttonsView(api);
-    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveAttribute("readonly");
-    expect(screen.queryByRole("slider", { name: "DPI desiderati" })).not.toBeInTheDocument();
-    expect(panel.getAllByRole("combobox", { name: /^Azione per/ })).toHaveLength(2);
-    expect(panel.queryByRole("combobox", { name: "Azione per Clic destro" })).not.toBeInTheDocument();
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
-    const target = panel.getByRole("combobox", { name: "Tasto per Laterale" });
+    expect(screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ })).toHaveAttribute("readonly");
+    expect(screen.queryByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).not.toBeInTheDocument();
+    expect(panel.getAllByRole("combobox", { name: /^(?:Action for|Azione per)/ })).toHaveLength(2);
+    expect(panel.queryByRole("combobox", { name: /(?:Action for Right Click|Azione per Clic destro)/ })).not.toBeInTheDocument();
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "key");
+    const target = panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ });
     expect(within(target).getAllByRole("option").map((option) => option.getAttribute("value"))).toEqual(["", "30"]);
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
     await user.selectOptions(target, "30");
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeEnabled();
     expect(apply).not.toHaveBeenCalled();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenCalledWith(device.id, [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], false, false);
     expect(setDpi).not.toHaveBeenCalled();
-    await waitFor(() => expect(panel.getByText("Attiva", { selector: "strong" })).toBeVisible());
+    await waitFor(() => expect(panel.getByText(/(?:Active|Attiva)/, { selector: "strong" })).toBeVisible());
   });
 
   it("compila clic, multimedia, disabilitato e default senza DSL o scritture durante la bozza", async () => {
     const api = createDemoApi(1);
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "mouseButton");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Clic per Laterale" }), "273");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale extra" }), "disabled");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "mouseButton");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Click for Side Button|Clic per Laterale)/ }), "273");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Extra Side Button|Azione per Laterale extra)/ }), "disabled");
     expect(apply).not.toHaveBeenCalled();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [
       { buttonId: "button-275", action: { kind: "mouseButton", code: 273 } },
       { buttonId: "button-276", action: { kind: "disabled" } },
     ], false, false);
-    await waitFor(() => expect(panel.getByText("Attiva", { selector: "strong" })).toBeVisible());
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "media");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Multimedia per Laterale" }), "164");
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await waitFor(() => expect(panel.getByText(/(?:Active|Attiva)/, { selector: "strong" })).toBeVisible());
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "media");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Media for Side Button|Multimedia per Laterale)/ }), "164");
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [
       { buttonId: "button-275", action: { kind: "key", code: 164 } },
       { buttonId: "button-276", action: { kind: "disabled" } },
     ], false, false);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "default");
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "default");
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [{ buttonId: "button-276", action: { kind: "disabled" } }], false, false);
   });
 
@@ -385,15 +385,15 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const api = createDemoApi(1);
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Clic sinistro" }), "disabled");
-    expect(panel.getByText(/Mantieni almeno una via al clic sinistro/)).toBeVisible();
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Left Click|Azione per Clic sinistro)/ }), "disabled");
+    expect(panel.getByText(/(?:Keep at least one way to left-click|Mantieni almeno una via al clic sinistro)/)).toBeVisible();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).not.toHaveBeenCalled();
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "mouseButton");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Clic per Laterale" }), "272");
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "mouseButton");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Click for Side Button|Clic per Laterale)/ }), "272");
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeEnabled();
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenCalledWith("demo-viper-1", [
       { buttonId: "button-272", action: { kind: "disabled" } }, { buttonId: "button-275", action: { kind: "mouseButton", code: 272 } },
     ], false, false);
@@ -405,27 +405,27 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const { user, panel } = await buttonsView(api);
     const windowListener = vi.spyOn(window, "addEventListener");
     const documentListener = vi.spyOn(document, "addEventListener");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "chord");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "chord");
     fireEvent.keyDown(window, { key: "c", code: "KeyC", ctrlKey: true });
     fireEvent.keyDown(document, { key: "c", code: "KeyC", ctrlKey: true });
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
-    const recorder = panel.getByRole("button", { name: "Acquisisci scorciatoia per Laterale" });
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("");
+    const recorder = panel.getByRole("button", { name: /(?:Record shortcut for Side Button|Acquisisci scorciatoia per Laterale)/ });
     await user.click(recorder);
     expect(recorder).toHaveFocus();
     fireEvent.keyDown(window, { key: "c", code: "KeyC", ctrlKey: true });
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("");
     fireEvent.keyDown(recorder, { key: "c", code: "KeyC", ctrlKey: true, repeat: true });
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("");
     fireEvent.keyDown(recorder, { key: "c", code: "KeyC", ctrlKey: true });
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("46");
-    expect(panel.getByRole("checkbox", { name: "Ctrl per Laterale" })).toBeChecked();
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("46");
+    expect(panel.getByRole("checkbox", { name: /(?:Ctrl for Side Button|Ctrl per Laterale)/ })).toBeChecked();
     expect(recorder).toHaveAttribute("aria-pressed", "false");
     expect(apply).not.toHaveBeenCalled();
     expect(windowListener.mock.calls.filter(([type]) => /^key/.test(type))).toHaveLength(0);
     expect(documentListener.mock.calls.filter(([type]) => /^key/.test(type))).toHaveLength(0);
     windowListener.mockRestore();
     documentListener.mockRestore();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "chord", modifiers: [29], key: 46 } }], false, false);
   });
 
@@ -433,16 +433,16 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const api = createDemoApi(1);
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "chord");
-    const recorder = panel.getByRole("button", { name: "Acquisisci scorciatoia per Laterale" });
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "chord");
+    const recorder = panel.getByRole("button", { name: /(?:Record shortcut for Side Button|Acquisisci scorciatoia per Laterale)/ });
     await user.click(recorder);
-    if (cancel === "blur") await user.click(screen.getByRole("textbox", { name: "DPI manuali" }));
-    else if (cancel === "cancel") await user.click(panel.getByRole("button", { name: "Annulla acquisizione per Laterale" }));
+    if (cancel === "blur") await user.click(screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ }));
+    else if (cancel === "cancel") await user.click(panel.getByRole("button", { name: /(?:Cancel recording for Side Button|Annulla acquisizione per Laterale)/ }));
     else fireEvent.keyDown(recorder, { key: cancel, code: cancel });
     expect(recorder).toHaveAttribute("aria-pressed", "false");
     fireEvent.keyDown(recorder, { key: "v", code: "KeyV", ctrlKey: true });
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("");
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("");
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
     expect(apply).not.toHaveBeenCalled();
   });
 
@@ -451,22 +451,22 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const restore = vi.spyOn(api, "disableMouseRemapping");
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "30");
-    const autoApply = panel.getByRole("switch", { name: "Riattiva automaticamente" });
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "key");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ }), "30");
+    const autoApply = panel.getByRole("switch", { name: /(?:Auto-apply on startup|Riattiva automaticamente)/ });
     await user.click(autoApply);
     expect(autoApply).toBeChecked();
-    expect(panel.getByText(/Riattivazione automatica salvata: no/)).toBeVisible();
+    expect(panel.getByText(/(?:Saved auto-apply: no|Riattivazione automatica salvata: no)/)).toBeVisible();
     expect(apply).not.toHaveBeenCalled();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], true, false);
-    await waitFor(() => expect(panel.getByText(/Riattivazione automatica salvata: si/)).toBeVisible());
+    await waitFor(() => expect(panel.getByText(/(?:Saved auto-apply: yes|Riattivazione automatica salvata: si)/)).toBeVisible());
     expect(autoApply).toBeChecked();
-    await user.click(panel.getByRole("button", { name: "Ripristina originali" }));
+    await user.click(panel.getByRole("button", { name: /(?:Restore defaults|Ripristina originali)/ }));
     expect(restore).toHaveBeenCalledWith("demo-viper-1");
-    await waitFor(() => expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible());
+    await waitFor(() => expect(panel.getByText(/(?:Inactive|Inattiva)/, { selector: "strong" })).toBeVisible());
     expect(autoApply).not.toBeChecked();
-    expect(panel.getByText(/Riattivazione automatica salvata: no/)).toBeVisible();
+    expect(panel.getByText(/(?:Saved auto-apply: no|Riattivazione automatica salvata: no)/)).toBeVisible();
   });
 
   it("richiede consenso esplicito per autoApply su identita debole e non lo trasferisce a un nuovo fingerprint", async () => {
@@ -478,23 +478,23 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     result.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "active", enabled: true, autoApply: true, profileId: "weak-profile", bindings: [{ buttonId: "button-275", action: { kind: "key", code: 30 } }] };
     const apply = vi.spyOn(api, "applyMouseRemapping").mockResolvedValue(result);
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "30");
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
-    await user.click(panel.getByRole("switch", { name: "Riattiva automaticamente" }));
-    const consent = panel.getByRole("checkbox", { name: /Consento la riattivazione automatica/ });
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "key");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ }), "30");
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeEnabled();
+    await user.click(panel.getByRole("switch", { name: /(?:Auto-apply on startup|Riattiva automaticamente)/ }));
+    const consent = panel.getByRole("checkbox", { name: /(?:I allow automatic reactivation|Consento la riattivazione automatica)/ });
     expect(consent).not.toBeChecked();
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
     await user.click(consent);
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "key", code: 30 } }], true, true);
     const moved = clone(result);
     moved.revision = 3;
     moved.devices[0].capabilities.remapping!.fingerprint = "other-port";
     act(() => emit(moved));
-    const newPanel = within(screen.getByRole("region", { name: /Pulsanti rilevati/ }));
-    expect(newPanel.getByRole("checkbox", { name: /Consento la riattivazione automatica/ })).not.toBeChecked();
-    expect(newPanel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    const newPanel = within(screen.getByRole("region", { name: /(?:Detected buttons|Pulsanti rilevati)/ }));
+    expect(newPanel.getByRole("checkbox", { name: /(?:I allow automatic reactivation|Consento la riattivazione automatica)/ })).not.toBeChecked();
+    expect(newPanel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
   });
 
   it("preserva bozze su stato busy/paused ed errori, senza ottimismo o accoppiamento a DPI invalidi", async () => {
@@ -504,28 +504,28 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const apply = vi.spyOn(api, "applyMouseRemapping").mockRejectedValue({ code: "busy", message: "Un altro remapper mantiene il grab.", detail: null });
     const getSnapshot = vi.spyOn(api, "getSnapshot");
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "31");
-    fireEvent.change(screen.getByRole("textbox", { name: "DPI manuali" }), { target: { value: "bad" } });
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ }), "31");
+    fireEvent.change(screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ }), { target: { value: "bad" } });
     const next = clone(initial);
     next.revision = 2;
     next.devices[0].values.remapping!.state = "paused";
     next.devices[0].values.remapping!.pausedForSafety = true;
     act(() => emit(next));
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("31");
-    expect(panel.getByText("In pausa", { selector: "strong" })).toBeVisible();
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Applica DPI" })).toBeDisabled();
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("31");
+    expect(panel.getByText(/(?:Paused|In pausa)/, { selector: "strong" })).toBeVisible();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ })).toBeDisabled();
     next.revision = 3;
     next.devices[0].values.remapping!.state = "busy";
     act(() => emit(next));
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     await screen.findByRole("alert");
     expect(apply).toHaveBeenCalledOnce();
     expect(getSnapshot).toHaveBeenCalledTimes(2);
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("31");
-    expect(panel.getByText("Occupata", { selector: "strong" })).toBeVisible();
-    expect(panel.getByText("Azione salvata: A")).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "DPI manuali" })).toHaveValue("bad");
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("31");
+    expect(panel.getByText(/(?:Busy|Occupata)/, { selector: "strong" })).toBeVisible();
+    expect(panel.getByText(/(?:Saved action: A|Azione salvata: A)/)).toBeVisible();
+    expect(screen.getByRole("textbox", { name: /(?:Manual DPI|DPI manuali)/ })).toHaveValue("bad");
   });
 
   it("attende il backend e ignora una risposta remap stale dopo un readback piu recente", async () => {
@@ -534,11 +534,11 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const write = deferred<Snapshot>();
     const apply = vi.spyOn(api, "applyMouseRemapping").mockReturnValue(write.promise);
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "key");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Tasto per Laterale" }), "30");
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
-    expect(panel.getByRole("button", { name: "Applicazione pulsanti..." })).toBeDisabled();
-    expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible();
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "key");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ }), "30");
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
+    expect(panel.getByRole("button", { name: /(?:Applying buttons\.\.\.|Applicazione pulsanti\.\.\.)/ })).toBeDisabled();
+    expect(panel.getByText(/(?:Inactive|Inattiva)/, { selector: "strong" })).toBeVisible();
     const latest = clone(initial);
     latest.revision = 8;
     latest.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "active", enabled: true, profileId: "new-profile", bindings: [{ buttonId: "button-275", action: { kind: "key", code: 31 } }] };
@@ -547,9 +547,9 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     older.revision = 7;
     older.devices[0].values.remapping!.bindings[0].action = { kind: "key", code: 30 };
     await act(async () => { write.resolve(older); await write.promise; });
-    expect(panel.getByRole("combobox", { name: "Tasto per Laterale" })).toHaveValue("31");
-    expect(panel.getByText("Azione salvata: S")).toBeVisible();
-    expect(screen.getByText("LETTURA / 0008")).toBeVisible();
+    expect(panel.getByRole("combobox", { name: /(?:Key for Side Button|Tasto per Laterale)/ })).toHaveValue("31");
+    expect(panel.getByText(/(?:Saved action: S|Azione salvata: S)/)).toBeVisible();
+    expect(screen.getByText(/(?:READING \/ 0008|LETTURA \/ 0008)/)).toBeVisible();
     expect(apply).toHaveBeenCalledOnce();
   });
 
@@ -564,13 +564,13 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     result.devices[0].values.remapping = { ...initial.devices[0].values.remapping!, state: "inactive", enabled: false, autoApply: false, pausedForSafety: false };
     const restore = vi.spyOn(api, "disableMouseRemapping").mockResolvedValue(result);
     const { user, panel } = await buttonsView(api);
-    expect(panel.getByRole("combobox", { name: "Azione per Laterale" })).toBeDisabled();
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
-    expect(panel.getByRole("button", { name: "Ripristina originali" })).toBeEnabled();
-    await user.click(panel.getByRole("button", { name: "Ripristina originali" }));
+    expect(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ })).toBeDisabled();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
+    expect(panel.getByRole("button", { name: /(?:Restore defaults|Ripristina originali)/ })).toBeEnabled();
+    await user.click(panel.getByRole("button", { name: /(?:Restore defaults|Ripristina originali)/ }));
     expect(restore).toHaveBeenCalledWith("demo-viper-1");
-    await waitFor(() => expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible());
-    expect(panel.getByRole("switch", { name: "Riattiva automaticamente" })).not.toBeChecked();
+    await waitFor(() => expect(panel.getByText(/(?:Inactive|Inattiva)/, { selector: "strong" })).toBeVisible());
+    expect(panel.getByRole("switch", { name: /(?:Auto-apply on startup|Riattiva automaticamente)/ })).not.toBeChecked();
   });
 
   it("non inventa sorgenti salvate scomparse e blocca Apply finche vengono ripristinati gli originali", async () => {
@@ -580,10 +580,10 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const { api } = controlledApi(initial);
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const { panel } = await buttonsView(api);
-    expect(panel.getAllByRole("combobox", { name: /^Azione per/ })).toHaveLength(1);
-    expect(panel.getByText(/Pulsanti salvati non rilevati: missing-button/)).toBeVisible();
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
-    expect(panel.getByRole("button", { name: "Ripristina originali" })).toBeEnabled();
+    expect(panel.getAllByRole("combobox", { name: /^(?:Action for|Azione per)/ })).toHaveLength(1);
+    expect(panel.getByText(/(?:Saved buttons not detected: missing-button|Pulsanti salvati non rilevati: missing-button)/)).toBeVisible();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
+    expect(panel.getByRole("button", { name: /(?:Restore defaults|Ripristina originali)/ })).toBeEnabled();
     expect(apply).not.toHaveBeenCalled();
   });
 
@@ -597,12 +597,12 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     vi.spyOn(api, "disableMouseRemapping").mockResolvedValue(restored);
     const apply = vi.spyOn(api, "applyMouseRemapping").mockResolvedValue(restored);
     const { user, panel } = await buttonsView(api);
-    await user.click(panel.getByRole("button", { name: "Ripristina originali" }));
-    await waitFor(() => expect(panel.getByText("Inattiva", { selector: "strong" })).toBeVisible());
-    expect(panel.getByText(/Pulsanti salvati non rilevati: missing-button/)).toBeVisible();
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "disabled");
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeEnabled();
-    await user.click(panel.getByRole("button", { name: "Applica pulsanti" }));
+    await user.click(panel.getByRole("button", { name: /(?:Restore defaults|Ripristina originali)/ }));
+    await waitFor(() => expect(panel.getByText(/(?:Inactive|Inattiva)/, { selector: "strong" })).toBeVisible());
+    expect(panel.getByText(/(?:Saved buttons not detected: missing-button|Pulsanti salvati non rilevati: missing-button)/)).toBeVisible();
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "disabled");
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeEnabled();
+    await user.click(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ }));
     expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "disabled" } }], false, false);
   });
 
@@ -610,14 +610,14 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const api = createDemoApi();
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const { user, panel } = await buttonsView(api);
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "disabled");
-    await user.click(panel.getByRole("button", { name: "Annulla bozza pulsanti" }));
-    expect(panel.getByRole("combobox", { name: "Azione per Laterale" })).toHaveValue("default");
-    await user.selectOptions(panel.getByRole("combobox", { name: "Azione per Laterale" }), "disabled");
-    await user.selectOptions(screen.getByLabelText("Mouse selezionato"), "demo-g305-1");
-    const nextPanel = within(screen.getByRole("region", { name: /Pulsanti rilevati/ }));
-    expect(nextPanel.getByRole("combobox", { name: "Azione per Laterale" })).toHaveValue("default");
-    expect(nextPanel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "disabled");
+    await user.click(panel.getByRole("button", { name: /(?:Discard button draft|Annulla bozza pulsanti)/ }));
+    expect(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ })).toHaveValue("default");
+    await user.selectOptions(panel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ }), "disabled");
+    await user.selectOptions(screen.getByLabelText(/(?:Selected mouse|Mouse selezionato)/), "demo-g305-1");
+    const nextPanel = within(screen.getByRole("region", { name: /(?:Detected buttons|Pulsanti rilevati)/ }));
+    expect(nextPanel.getByRole("combobox", { name: /(?:Action for Side Button|Azione per Laterale)/ })).toHaveValue("default");
+    expect(nextPanel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
     expect(apply).not.toHaveBeenCalled();
   });
 
@@ -631,8 +631,8 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     const { api } = controlledApi(initial);
     const apply = vi.spyOn(api, "applyMouseRemapping");
     const { panel } = await buttonsView(api);
-    expect(panel.getByRole("button", { name: "Applica pulsanti" })).toBeDisabled();
-    expect(panel.getByRole("switch", { name: "Riattiva automaticamente" })).toBeDisabled();
+    expect(panel.getByRole("button", { name: /(?:Apply buttons|Applica pulsanti)/ })).toBeDisabled();
+    expect(panel.getByRole("switch", { name: /(?:Auto-apply on startup|Riattiva automaticamente)/ })).toBeDisabled();
     for (const control of panel.queryAllByRole("combobox")) expect(control).toBeDisabled();
     expect(apply).not.toHaveBeenCalled();
   });
@@ -649,7 +649,7 @@ describe("audio confermato e profili espliciti", () => {
     await user.click(toggle);
     await screen.findByRole("alert");
     expect(toggle).not.toBeChecked();
-    expect(screen.getByText("Disattivato")).toBeVisible();
+    expect(screen.getByText(/(?:Disabled|Disattivato)/)).toBeVisible();
     expect(screen.queryByText("Attivo", { exact: true })).not.toBeInTheDocument();
     expect(getSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -679,9 +679,9 @@ describe("audio confermato e profili espliciti", () => {
     const write = deferred<Snapshot>();
     vi.spyOn(api, "setDpi").mockReturnValue(write.promise);
     await dashboard(api);
-    fireEvent.change(screen.getByRole("slider", { name: "DPI desiderati" }), { target: { value: "1200" } });
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
-    expect(screen.getByRole("button", { name: "Applicazione DPI..." })).toBeDisabled();
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ }), { target: { value: "1200" } });
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
+    expect(screen.getByRole("button", { name: /(?:Applying DPI\.\.\.|Applicazione DPI\.\.\.)/ })).toBeDisabled();
     const surround = screen.getByRole("switch", { name: "Surround 7.1" });
     expect(surround).toBeEnabled();
     await user.click(surround);
@@ -697,16 +697,16 @@ describe("audio confermato e profili espliciti", () => {
     initial.audio.inputs[0].muted = null;
     await dashboard(controlledApi(initial).api);
     await user.click(screen.getByRole("tab", { name: /Audio/ }));
-    const picker = screen.getByLabelText("Uscita audio");
-    fireEvent.change(screen.getByRole("slider", { name: "Volume uscita" }), { target: { value: "20" } });
+    const picker = screen.getByLabelText(/(?:Audio output|Uscita audio)/);
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Output volume|Volume uscita)/ }), { target: { value: "20" } });
     await user.selectOptions(picker, initial.audio.outputs[0].nodeName);
-    expect(screen.getByRole("slider", { name: "Volume uscita" })).toHaveValue("62");
+    expect(screen.getByRole("slider", { name: /(?:Output volume|Volume uscita)/ })).toHaveValue("62");
     await user.selectOptions(picker, initial.audio.outputs[1].nodeName);
-    expect(screen.getByRole("slider", { name: "Volume uscita" })).toHaveValue("68");
-    expect(screen.getByRole("slider", { name: "Guadagno microfono" })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "Silenzia microfono" })).toBeDisabled();
-    expect(screen.getByText("Stato mute non leggibile.")).toBeVisible();
-    expect(screen.getByRole("slider", { name: "Guadagno microfono" })).toHaveAttribute("aria-valuetext", "Volume non disponibile");
+    expect(screen.getByRole("slider", { name: /(?:Output volume|Volume uscita)/ })).toHaveValue("68");
+    expect(screen.getByRole("slider", { name: /(?:Microphone gain|Guadagno microfono)/ })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: /(?:Mute microphone|Silenzia microfono)/ })).toBeDisabled();
+    expect(screen.getByText(/(?:Mute state not readable\.|Stato mute non leggibile\.)/)).toBeVisible();
+    expect(screen.getByRole("slider", { name: /(?:Microphone gain|Guadagno microfono)/ })).toHaveAttribute("aria-valuetext", "Volume not available");
   });
 
   it("importa HRTF senza argomenti e salva/applica profili solo su azione esplicita", async () => {
@@ -718,20 +718,20 @@ describe("audio confermato e profili espliciti", () => {
     await dashboard(api);
     await user.click(screen.getByRole("tab", { name: /Audio/ }));
     expect(apply).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Importa HRTF SOFA" }));
+    await user.click(screen.getByRole("button", { name: /(?:Import SOFA HRTF|Importa HRTF SOFA)/ }));
     expect(importHrtf).toHaveBeenCalledWith();
-    await user.click(screen.getByText(/Nuovo profilo/, { selector: "summary" }));
-    await user.type(screen.getByLabelText("Nome del profilo"), "Spaziale");
-    fireEvent.change(screen.getByRole("slider", { name: /Volume desiderato/ }), { target: { value: "90" } });
-    await user.click(screen.getByRole("switch", { name: "Surround desiderato nel profilo" }));
-    await user.click(screen.getByRole("button", { name: "Salva profilo" }));
+    await user.click(screen.getByText(/(?:New profile|Nuovo profilo)/, { selector: "summary" }));
+    await user.type(screen.getByLabelText(/(?:Profile name|Nome del profilo)/), "Spaziale");
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Desired volume|Volume desiderato)/ }), { target: { value: "90" } });
+    await user.click(screen.getByRole("switch", { name: /(?:Desired surround in profile|Surround desiderato nel profilo)/ }));
+    await user.click(screen.getByRole("button", { name: /(?:Save profile|Salva profilo)/ }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1, name: "Spaziale", volume: 0.9, surroundRequested: true }));
     expect(apply).not.toHaveBeenCalled();
     expect(screen.getByRole("switch", { name: "Surround 7.1" })).not.toBeChecked();
-    await user.click(await screen.findByRole("button", { name: "Applica profilo Spaziale" }));
+    await user.click(await screen.findByRole("button", { name: /(?:Apply profile Spaziale|Applica profilo Spaziale)/ }));
     expect(apply).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.getByRole("switch", { name: "Surround 7.1" })).toBeChecked());
-    expect(screen.getByRole("slider", { name: "Volume uscita" })).toHaveValue("68");
+    expect(screen.getByRole("slider", { name: /(?:Output volume|Volume uscita)/ })).toHaveValue("68");
   });
 });
 
@@ -743,8 +743,8 @@ describe("revisioni, hotplug e lifecycle", () => {
     const write = deferred<Snapshot>();
     vi.spyOn(api, "setDpi").mockReturnValue(write.promise);
     await dashboard(api);
-    fireEvent.change(screen.getByRole("slider", { name: "DPI desiderati" }), { target: { value: "3200" } });
-    await user.click(screen.getByRole("button", { name: "Applica DPI" }));
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ }), { target: { value: "3200" } });
+    await user.click(screen.getByRole("button", { name: /(?:Apply DPI|Applica DPI)/ }));
     const latest = clone(initial);
     latest.revision = 9;
     latest.devices[0].values.dpi = { x: 1600, y: 1600 };
@@ -755,7 +755,7 @@ describe("revisioni, hotplug e lifecycle", () => {
     act(() => emit(older));
     await act(async () => { write.resolve(older); await write.promise; });
     expect(screen.getByText("1600 DPI", { selector: "strong" })).toBeVisible();
-    expect(screen.getByText("LETTURA / 0009")).toBeVisible();
+    expect(screen.getByText(/(?:READING \/ 0009|LETTURA \/ 0009)/)).toBeVisible();
   });
 
   it("non sovrascrive un evento recente con una lettura iniziale tardiva", async () => {
@@ -771,7 +771,7 @@ describe("revisioni, hotplug e lifecycle", () => {
     act(() => emit(latest));
     await act(async () => { loading.resolve(initial); await loading.promise; });
     expect(screen.getByText("1800 DPI", { selector: "strong" })).toBeVisible();
-    expect(screen.getByText("LETTURA / 0004")).toBeVisible();
+    expect(screen.getByText(/(?:READING \/ 0004|LETTURA \/ 0004)/)).toBeVisible();
   });
 
   it("unplug del mouse selezionato passa al successivo senza valori della bozza precedente", async () => {
@@ -780,17 +780,17 @@ describe("revisioni, hotplug e lifecycle", () => {
     const { api, emit } = controlledApi(initial);
     await dashboard(api);
     await user.click(screen.getByRole("tab", { name: /Mouse/ }));
-    fireEvent.change(screen.getByRole("slider", { name: "DPI desiderati" }), { target: { value: "1200" } });
+    fireEvent.change(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ }), { target: { value: "1200" } });
     const next = clone(initial);
     next.revision = 2;
     next.devices = next.devices.filter((device) => device.id !== "demo-viper-1");
     act(() => emit(next));
     expect(screen.getByRole("heading", { name: "Logitech G305" })).toBeVisible();
-    expect(screen.getByRole("slider", { name: "DPI desiderati" })).toHaveValue("2");
+    expect(screen.getByRole("slider", { name: /(?:Target DPI|DPI desiderati)/ })).toHaveValue("2");
     next.revision = 3;
     next.devices = [];
     act(() => emit(next));
-    expect(screen.getByRole("heading", { name: "Nessun mouse rilevato" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: /(?:No mouse detected|Nessun mouse rilevato)/ })).toBeVisible();
   });
 
   it("StrictMode pulisce anche una sottoscrizione risolta dopo l'unmount", async () => {

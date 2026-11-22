@@ -1,0 +1,9 @@
+[Desktop Entry]
+Categories=Utility;
+Comment=Periferiche Razer e Logitech, audio PipeWire e HRTF 7.1
+Exec=peripheral-hub
+StartupWMClass=peripheral-hub
+Icon=peripheral-hub
+Name=Peripheral Hub
+Terminal=false
+Type=Application

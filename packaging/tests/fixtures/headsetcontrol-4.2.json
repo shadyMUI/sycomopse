@@ -1,0 +1,43 @@
+{
+  "name": "HeadsetControl",
+  "version": "4.2.0",
+  "api_version": "1.6",
+  "hidapi_version": "0.15.0",
+  "device_count": 3,
+  "devices": [
+    {
+      "status": "success",
+      "device": "Logitech G533",
+      "vendor": "Logitech",
+      "product": "G533",
+      "id_vendor": "0x046d",
+      "id_product": "0x0a66",
+      "capabilities": ["CAP_SIDETONE", "CAP_BATTERY_STATUS", "CAP_INACTIVE_TIME"],
+      "capabilities_str": ["sidetone", "battery", "inactive time"],
+      "battery": {"status": "BATTERY_AVAILABLE", "level": 64}
+    },
+    {
+      "status": "success",
+      "device": "Logitech G535",
+      "vendor": "Logitech",
+      "product": "G535",
+      "id_vendor": "0x046d",
+      "id_product": "0x0ac4",
+      "capabilities": ["CAP_SIDETONE", "CAP_BATTERY_STATUS", "CAP_INACTIVE_TIME"],
+      "capabilities_str": ["sidetone", "battery", "inactive time"],
+      "battery": {"status": "BATTERY_CHARGING", "level": 72}
+    },
+    {
+      "status": "partial",
+      "device": "Logitech G930",
+      "vendor": "Logitech",
+      "product": "G930",
+      "id_vendor": "0x046d",
+      "id_product": "0x0a1f",
+      "capabilities": ["CAP_SIDETONE", "CAP_BATTERY_STATUS"],
+      "capabilities_str": ["sidetone", "battery"],
+      "battery": {"status": "BATTERY_UNAVAILABLE", "level": -1},
+      "errors": {"battery": "HID timeout"}
+    }
+  ]
+}

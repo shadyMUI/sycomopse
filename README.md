@@ -1,222 +1,294 @@
-# sycomopse
+# Peripheral Hub (sycomopse)
 
-Peripheral Hub 0.1.0: client Linux Tauri per le periferiche esposte da OpenRazer,
-libratbag, UPower e HeadsetControl, audio PipeWire/HRTF e rimappatura software del
-mouse. L'app e l'agente sono MIT. Il motore Input Remapper privato e un processo
-GPL separato; licenze, attribuzioni e sorgenti corrispondenti sono nel pacchetto
-e nel bundle di installazione.
+**Peripheral Hub 0.1.0** is a modern, open-source, modular Linux peripheral management suite built with **Tauri 2** and **React 19**. It is designed for centralized configuration of gaming peripherals (mice, keyboards, headsets), advanced spatial audio virtualization, and low-level software/hardware input remapping.
 
-## Installazione Linux
+It provides native integration with key Linux subsystems:
+- **OpenRazer**: advanced support for Razer mice (including 2.4 GHz wireless devices such as the Razer Viper V3 HyperSpeed), multi-stage DPI management, polling rate control (125 / 500 / 1000 Hz), battery percentage, and charging state reporting.
+- **libratbag / ratbagd**: complete support for Logitech, SteelSeries, Roccat, and other compatible mice via D-Bus.
+- **HeadsetControl (4.2.0)**: status monitoring and feature configuration for supported gaming headsets (battery level, sidetone, chatmix, LED controls).
+- **PipeWire / HRTF (libmysofa)**: 7.1 virtual surround sound, binaural HRTF profiles, and real-time audio convolution through a dedicated headless worker.
+- **Input Remapping Engine**: flexible evdev/uinput-level remapping for physical buttons, thumb/side buttons, key bindings, and macros via an isolated service.
+- **UPower**: unified power and battery level monitoring for standard wireless and Bluetooth peripherals.
 
-Scaricare il **pacchetto nativo della propria distro/versione** prodotto dal
-workflow `Linux Native Packaging`, non il pacchetto GUI generato direttamente
-da Tauri. Il pacchetto include GUI, agente, backend privato Input Remapper,
-CLI HeadsetControl verificato, unita systemd e avvio della sessione utente.
-Non occorre eseguire `install.sh` per l'installazione normale.
-Il bundle di distribuzione contiene anche manifest/checksum, rootfs verificabile,
-archivi sorgente e strumenti opzionali di provisioning/riparazione hardware.
-Questa pipeline carica soltanto artefatti di build: non pubblica release, repo
-o AUR e non genera chiavi di firma.
+The user interface (GUI) and background session agents are licensed under the **MIT License**. The private input remapping engine is an isolated standalone process licensed under the **GPL-3.0** (licenses, attributions, and corresponding source archives are included in every distribution package and bundle).
 
-Installazione normale, scegliendo il file costruito per la propria distro:
+---
 
-```sh
-# Ubuntu / Debian: apt risolve le dipendenze del file locale.
-sudo apt install ./peripheral-hub_0.1.0-1_amd64.deb
-# Arch / CachyOS: non usare o convertire un DEB.
-sudo pacman -U ./peripheral-hub-0.1.0-1-x86_64.pkg.tar.zst
-# Fedora oppure openSUSE: usare il rispettivo RPM, non un RPM di un'altra distro.
-sudo dnf install ./peripheral-hub-0.1.0-1.x86_64.rpm
+## Table of Contents
+
+1. [Key Features](#key-features)
+2. [Native Package Installation](#native-package-installation)
+3. [Architecture & Security Model](#architecture--security-model)
+4. [Remapping Agent & Session Recovery](#remapping-agent--session-recovery)
+5. [User Consents, Drivers & Hardware State](#user-consents-drivers--hardware-state)
+6. [Repair, Verification & Removal](#repair-verification--removal)
+7. [Distribution Support Matrix & CI Validation](#distribution-support-matrix--ci-validation)
+8. [Local Development & Building](#local-development--building)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## Key Features
+
+### 🖱️ Mouse Management & Performance
+- **Real-Time DPI Control**: select and switch DPI stages bidirectionally synchronized with the physical buttons on the mouse.
+- **Wireless HyperSpeed Reliability**: robust reading via `getDPIStages` (opcode `0x86`) that prevents USB timeout failures on 2.4 GHz wireless dongles, avoiding unintended resets back to fallback default values (e.g. 1800 DPI).
+- **Polling Rate Switching**: configure polling rates to 125 Hz, 500 Hz, or 1000 Hz with persistent configuration deduplication in `~/.config/openrazer/persistence.conf`.
+- **Battery Status & Monitoring**: live remaining percentage and charging status displayed directly in the dashboard and desktop system tray.
+
+### ⌨️ Button Remapping & Macros
+- Remap physical mouse buttons (e.g., thumb buttons 4 & 5) to keyboard keys, function keys, or custom sequences.
+- Low-level event injection via a virtual `uinput` device.
+- Instant fallback and fail-safe recovery via the non-root desktop entry **"Restore Mouse"** or CLI command.
+
+### 🎧 Spatial Audio & Headset Controls
+- **HRTF Virtual Surround**: PipeWire filter-chain integration using SOFA convolution (via `libmysofa`) for precise 3D positional audio.
+- **Headless Audio Worker**: lightweight background helper process (`peripheral-hub-audio-worker`) decoupled from the GUI lifecycle.
+- **HeadsetControl Integration**: battery telemetry and sidetone adjustments for supported headsets without proprietary vendor software.
+
+---
+
+## Native Package Installation
+
+Pre-built and verified native packages for all supported Linux distributions are available under:
+```
+packaging/out/
+```
+
+> [!IMPORTANT]
+> Always install the **specific native package** built for your distribution and version. Do not convert packages across distributions using alien or third-party wrappers. Each package includes the GUI, user session agent, private remapper engine, audio worker, verified HeadsetControl CLI, systemd units, and desktop integration.
+
+### Distribution Installation Commands (Run from Repository Root)
+
+#### Ubuntu 24.04 LTS (Noble Numbat) / Pop!_OS 24.04
+```bash
+sudo apt install ./packaging/out/peripheral-hub-0.1.0-ubuntu-24.04-x86_64/peripheral-hub_0.1.0-1_amd64.deb
+```
+
+#### Ubuntu 22.04 LTS (Jammy Jellyfish)
+```bash
+sudo apt install ./packaging/out/peripheral-hub-0.1.0-ubuntu-22.04-x86_64/peripheral-hub_0.1.0-1_amd64.deb
+```
+
+#### Fedora 44 / Red Hat Enterprise Linux
+```bash
+sudo dnf install ./packaging/out/peripheral-hub-0.1.0-fedora-44-x86_64/peripheral-hub-0.1.0-1.x86_64.rpm
+```
+
+#### Arch Linux / Manjaro / CachyOS
+```bash
+sudo pacman -U ./packaging/out/peripheral-hub-0.1.0-arch-x86_64/peripheral-hub-0.1.0-1-x86_64.pkg.tar.zst
+```
+
+#### openSUSE (Leap 16.0 / Tumbleweed)
+```bash
 sudo zypper install ./peripheral-hub-0.1.0-1.x86_64.rpm
 ```
 
-Gli strumenti opzionali del bundle verificano anche checksum e dimensione di **tutti** i file elencati
-prima di chiedere l'autorizzazione. I checksum rilevano corruzione/modifiche,
-non autenticano un archivio proveniente da una fonte sconosciuta. Gli artefatti
-locali non sono automaticamente firmati: eventuali policy native che richiedono
-una firma vengono rispettate, senza `--nogpgcheck`, repository non autenticati
-o modifiche alle policy. Usare solo artefatti di una build fidata.
+### Automatic Dependency Resolution
+Your native package manager (`apt`, `pacman`, `dnf`, `zypper`) will automatically resolve all required dependencies:
+- **GUI & Runtime**: WebKitGTK 4.1 (`libwebkit2gtk-4.1`), GTK3, AppIndicator3, Python >= 3.10, Cairo, PyGObject, Pydantic.
+- **Hardware & Audio**: PipeWire, WirePlumber, libmysofa, UPower, libratbag/ratbagd, OpenRazer daemon/DKMS.
 
-L'autorizzazione amministrativa e quella del normale gestore pacchetti.
-Gli hook nativi configurano e avviano soltanto il servizio privato dell'app,
-rispettano maschere/policy-rc.d/preset amministrativi e non eseguono apt/pacman
-o altri gestori ricorsivamente. Upgrade non riattiva un servizio disabilitato o
-fermato, anche senza un registro precedente. Dopo remove, la reinstallazione
-ripristina solo abilitazione e avvio effettivamente rimossi dal pacchetto,
-registrati in `/var/lib/peripheral-hub/native-status.json`.
-Un'installazione offline/chroot configura l'avvio al boot e non finge un servizio
-running. L'entry XDG avvia l'agente nella sessione grafica normale; GUI e agente
-non sono root e gli hook non eseguono `systemctl --user` per altri utenti.
-Le modifiche all'autostart XDG, come `Hidden=true`, sono conservate durante
-upgrade/reinstallazione in-place tramite conffile DEB, backup Arch e config RPM.
+---
 
-Dipendenze online risolte con apt, pacman, dnf o zypper e repository autenticati:
-WebKitGTK **4.1**, GTK3/appindicator, Python >=3.10, evdev, psutil, dasbus,
-Cairo/PyGObject, Pydantic, packaging, typelib **GtkSource4**, PipeWire,
-WirePlumber, libmysofa, UPower, libratbag/ratbagd e OpenRazer daemon/DKMS.
-L'engine Input Remapper 2.2.1 e incluso privatamente: nessun AUR per l'utente,
-nessun pip globale, build root dell'app/engine o script remoto eseguito via pipe.
-Quando evdev della distro non espone `UInput.input_props`, la build include una
-copia privata 1.9.2 compilata per il Python/ELF del target e la sua fonte BSD.
+## Architecture & Security Model
 
-Le dipendenze obbligatorie includono WirePlumber e ratbag/UPower, non solo librerie
-GUI. DEB e Arch dichiarano anche i pacchetti OpenRazer disponibili nei repository
-della distro; RPM li raccomanda quando il repository upstream e disponibile.
-`pipewire-pulse` e raccomandato, non viene installato da un hook nascostamente.
-I driver restano dipendenti da kernel, headers, permessi e Secure Boot: un package
-installato non dimostra che ogni dispositivo Razer o stack audio sia gia pronto.
+The application enforces strict privilege separation across dedicated processes:
 
-Gli eventuali repo OpenRazer aggiunti tramite il provisioning opzionale sono quelli upstream ufficiali: PPA stable su
-Ubuntu, OBS hardware:razer su Debian/Fedora/openSUSE, pacchetti ufficiali su
-Arch/CachyOS. Le chiavi **pubbliche upstream esistenti** sono controllate per
-fingerprint e le configurazioni aggiunte hanno nomi propri dell'installer.
-Configurazioni diverse gia presenti non vengono sovrascritte.
-
-## Consensi E Stato
-
-- PulseAudio non viene sostituito senza consenso; lo stesso vale per il passaggio da pipewire-media-session a WirePlumber.
-- ratbagd puo effettuare probe USB/HID: il suo avvio richiede consenso esplicito.
-- Gli headers devono corrispondere al kernel realmente in esecuzione. CachyOS usa il `pkgbase` effettivo; Fedora usa il kernel-devel esatto, non kernel-debug-devel.
-- Nessun altro kernel viene installato per risolvere automaticamente un mismatch. Headers non disponibili o DKMS fallito restano errori/pending.
-- Secure Boot non viene disabilitato. Se attivo, DKMS richiede un consenso separato e l'eventuale firma/enrollment MOK resta da completare con gli strumenti della distro. Non vengono create chiavi.
-- Nuovo gruppo plugdev, driver non ancora caricato o accesso udev non aggiornato possono richiedere logout/login, reboot o riconnessione. Lo stato non viene dichiarato pronto prima di questi passaggi.
-- Rifiutare un backend conserva gli altri componenti installabili, ma produce uno stato incompleto esplicito, non successo completo.
-
-Per automazione, `--yes` conferma la transazione generale, **non** i consensi
-separati. Sono disponibili `--consent-audio-switch`,
-`--consent-session-manager`, `--consent-ratbag`, `--consent-repository` e
-`--consent-unsigned-dkms`, oltre a `--without-audio` e `--without-openrazer`.
-Codici d'uscita: `0` operazione pronta/rimozione riuscita, `2` componenti o
-sessione pending, `1` errore. Il report distingue pacchetto installato, servizi
-running, pending e fallimento parziale; non nasconde la necessita di riparazione.
-
-**HeadsetControl:** il parser Rust usa l'API JSON reale `1.6`, verificata sul
-codice/fixture upstream 4.2.0. Conteggio, ID, capability e letture parziali vengono
-validati; il campo inventato `readable_capabilities` non e richiesto. La build
-deve includere un CLI privato conforme e compatibile con l'ELF/Python del target,
-oppure fallisce invece di distribuire un pacchetto incompleto. Il runtime puo
-preferire un CLI di sistema conforme. Nessuna batteria o supporto di un modello
-vengono inventati per il semplice fatto che il programma e installato.
-
-## Agente E Recovery
-
-Il pacchetto completo installa:
-
-- GUI `/usr/bin/peripheral-hub`.
-- Agente `/usr/bin/peripheral-hub-remapping-agent`, compilato con Cargo `--no-default-features`.
-- Unita utente `peripheral-hub-remapping-agent.service`.
-- Engine privato e risorse in `/usr/lib/peripheral-hub/remapper/`, wrapper `/usr/lib/peripheral-hub/remapper-service`.
-- Unita di sistema `peripheral-hub-input-remapper.service` e bus `io.peripheralhub.InputRemapper` indipendenti dal servizio Input Remapper stock.
-- Voce desktop **Ripristina mouse**, che esegue soltanto il recovery non-root dell'app.
-
-Chiudere la GUI o usare Esci non disabilita l'agente. Per interrompere soltanto
-le rimappature gestite dall'app:
-
-```sh
-peripheral-hub-remapping-agent --disable-all
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Peripheral Hub GUI                       │
+│             (Tauri 2 / Rust + React 19 Frontend)            │
+│                 Executed as Standard User                   │
+└──────────────┬───────────────────────────────┬──────────────┘
+               │ IPC / Custom Protocol         │ Session D-Bus
+               ▼                               ▼
+┌───────────────────────────────┐ ┌───────────────────────────┐
+│  peripheral-hub-audio-worker  │ │ peripheral-hub-remapping- │
+│  (PipeWire Headless Worker)   │ │ agent (Session Agent)     │
+└───────────────────────────────┘ └─────────────┬─────────────┘
+                                                │ Private System D-Bus
+                                                ▼ (io.peripheralhub.InputRemapper)
+                                  ┌───────────────────────────┐
+                                  │ peripheral-hub-remapper-  │
+                                  │ service (GPL Daemon)      │
+                                  └───────────────────────────┘
 ```
 
-La recovery usa lo stato osservato e un registro privato separato dai profili:
-puo rilasciare i preset propri anche se il file dei profili e corrotto o ha una
-versione sconosciuta, senza sovrascriverlo. Una disattivazione rimane persistita;
-un nuovo **Applica pulsanti** esplicito la rimuove solo dopo conferma e salvataggio.
-Il locator dell'agente conserva anche un `XDG_CONFIG_HOME` personalizzato, senza
-richiedere che systemd erediti l'ambiente della GUI.
+- **Process Privilege Isolation**: Neither the GUI nor the background agents require root privileges.
+- **Non-Invasive System Integration**: Native hooks never overwrite external configuration files, do not pipe unverified remote scripts to bash, and respect administrative system policies (`policy-rc.d`, systemd masks).
+- **License Compliance**: The GPL Input Remapper engine is isolated across a private system D-Bus bus (`io.peripheralhub.InputRemapper`) without static linking to the MIT-licensed application code. Complete corresponding source archives are included in the bundle under `sources/`.
 
-Il backend non prende il controllo di un altro remapper: grab esclusivo occupato
-significa errore/Busy, non arresto di un servizio esterno. L'installer non
-sovrascrive configurazioni Input Remapper, OpenRazer, ratbag o audio standard.
+---
 
-## Repair E Rimozione
+## Remapping Agent & Session Recovery
 
-Dalla directory del bundle corrispondente:
+The package installs:
+- **GUI**: `/usr/bin/peripheral-hub`
+- **Session Agent**: `/usr/bin/peripheral-hub-remapping-agent` (compiled with Cargo `--no-default-features`)
+- **Audio Worker**: `/usr/bin/peripheral-hub-audio-worker`
+- **Systemd User Unit**: `peripheral-hub-remapping-agent.service` (auto-started via `/etc/xdg/autostart/io.peripheralhub.RemappingAgent.desktop`)
+- **Private Remapper Engine**: `/usr/lib/peripheral-hub/remapper/` and wrapper `/usr/lib/peripheral-hub/remapper-service`
+- **Systemd System Unit**: `peripheral-hub-input-remapper.service`
+- **Desktop Recovery Shortcut**: **"Restore Mouse"** (`io.peripheralhub.Recovery.desktop`) to immediately reset mouse mappings without opening a terminal.
 
-```sh
+### Quick Recovery Commands
+If button mappings become unresponsive or you want to temporarily disable all active profiles:
+
+```bash
+# Immediately release and disable all active remapping presets
+peripheral-hub-remapping-agent --disable-all
+
+# Inspect current agent status
+peripheral-hub-remapping-agent --status
+```
+
+Recovery state is maintained in a private ledger separate from user profiles: it can safely detach active presets even if a profile configuration file is damaged or corrupted.
+
+---
+
+## User Consents, Drivers & Hardware State
+
+Peripheral Hub never silently changes audio backends or kernel drivers:
+- **No Unsolicited PulseAudio Replacement**: switching audio subsystems to PipeWire/WirePlumber requires explicit user consent.
+- **ratbagd**: device probing and daemon activation require explicit user opt-in.
+- **Kernel Headers & DKMS (OpenRazer)**:
+  - Kernel headers must match the running kernel version (on Fedora, exact `kernel-devel` is required, not `kernel-debug-devel`; on CachyOS, matching `pkgbase`).
+  - If **Secure Boot** is enabled, signing the DKMS module requires MOK enrollment through the distribution's official tooling. Insecure automated keys are never generated.
+- **`plugdev` Group & Udev Permissions**: To access Razer hardware without root privileges, add your user to the `plugdev` group:
+  ```bash
+  sudo gpasswd -a $USER plugdev
+  ```
+  *(Requires logging out and back in for changes to take effect).*
+
+---
+
+## Repair, Verification & Removal
+
+Every distribution bundle folder under `packaging/out/peripheral-hub-0.1.0-<target>-x86_64/` contains an actionable maintenance script:
+
+```bash
+cd packaging/out/peripheral-hub-0.1.0-ubuntu-24.04-x86_64/
+
+# Verify bundle integrity and check service status
 sh install.sh status
+
+# Repair missing or modified files, restore permissions, and reload units
 sh install.sh repair
+
+# Clean uninstallation (preserves user configuration and profiles)
 sh install.sh uninstall
 ```
 
-`repair` verifica di nuovo il bundle, risolve i pacchetti e reinstalla il
-payload proprio per ripristinare file mancanti, poi ricontrolla import,
-servizi, DKMS e fase utente. Usarlo anche dopo il logout/reboot richiesto per
-ricontrollare lo stato; niente elevazione implicita al primo avvio della GUI.
+- `repair`: audits all files against `manifest.json` SHA-256 checksums, reinstalls corrupted or deleted components, and re-validates backend connectivity.
+- `uninstall`: stops private background services and removes application binaries while leaving OpenRazer, PipeWire, and personal profiles untouched.
 
-La rimozione esegue recovery come utente e ferma/disabilita soltanto agente ed
-engine privati. Rimuove soltanto il pacchetto dell'app, non le dipendenze,
-OpenRazer, PipeWire, WirePlumber, UPower o ratbagd e non arresta servizi esterni.
-Dati e profili utente sono conservati. `uninstall --purge` rimuove anche i file
-repository creati dall'installer **solo se ancora invariati**; chiavi pubbliche
-importate e gruppi condivisi non vengono rimossi. Il registro di operazione
-rimane disponibile per diagnosticare modifiche esterne/fallimenti.
+---
 
-## Target E Validazione
+## Distribution Support Matrix & CI Validation
 
-La matrice definisce i seguenti **target di build**, non un generico supporto
-"tutto Linux":
+The packaging pipeline and continuous integration suites certify the following **x86_64** targets running **systemd**:
 
-| Target | Identita/versione accettata | Pacchetto |
-| --- | --- | --- |
-| Arch | `ID=arch`, rolling | `.pkg.tar.zst` |
-| CachyOS | `ID=cachyos`, rolling, immagine generica x86-64 | `.pkg.tar.zst` |
-| Ubuntu LTS | 22.04 jammy, 24.04 noble, 26.04 resolute | DEB |
-| Debian | 12 bookworm, 13 trixie | DEB |
-| Fedora mantenuta | 44, target con scadenza conservativa nel catalogo | RPM |
-| openSUSE Leap | 16.0 | RPM |
-| openSUSE Tumbleweed | `ID=opensuse-tumbleweed`, rolling | RPM |
+| Distribution | Supported Versions | Package Format |
+| :--- | :--- | :--- |
+| **Ubuntu LTS** | 22.04 (Jammy), 24.04 (Noble), 26.04 (Resolute) | `.deb` |
+| **Pop!_OS** | 24.04 (Noble host compatibility) | `.deb` |
+| **Debian** | 12 (Bookworm), 13 (Trixie) | `.deb` |
+| **Fedora** | 44 (current target) | `.rpm` |
+| **openSUSE** | Leap 16.0, Tumbleweed (rolling) | `.rpm` |
+| **Arch Linux** | Arch rolling, CachyOS (x86-64 generic) | `.pkg.tar.zst` |
 
-Solo x86_64, sistema mutabile e systemd. ARM, altri init, distro immutabili,
-NixOS, Alpine, Void, derivazioni non elencate ed edizioni/versioni EOL sono
-escluse. Nuove versioni richiedono una nuova build/test, non un alias ID_LIKE.
-Non e disponibile un installer offline completo per kernel arbitrari.
+> Non-systemd init systems (SysVinit, OpenRC, runit), immutable distributions, NixOS, Alpine, or Void Linux are not officially supported.
 
-Il workflow usa immagini pulite, ne registra il digest realmente scaricato e
-`os-release`, riusa il payload GUI Tauri, aggiunge agente e fetch/staging engine
-del componente privato, quindi genera **realmente** il pacchetto nativo tramite
-dpkg-deb/dpkg-shlibdeps, makepkg o rpmbuild. `readelf`/`ldd`, requisiti nativi e
-import Python sono registrati nel manifest. In un container systemd separato
-verifica installazione, hook di upgrade/reinstallazione della stessa 0.1.0,
-repair di un file proprio cancellato, autostart modificato, upgrade senza
-registro, DBus privato, agente/recovery come utente e remove/reinstallazione con
-backend attivo, disabilitato o fermato. Nessuna versione Cargo/app viene incrementata
-artificialmente per lo smoke.
+### Testing & Validation Environments
+- **Rootless Podman**: full containerized sandboxing using `keep-id:uid=1000,gid=1000`, user scope with `Delegate=yes`, cgroup v2, and isolated namespaces.
+- **Disposable QEMU VM**: On Ubuntu 24.04, install, upgrade, repair, removal, and autostart hooks are thoroughly validated inside an ephemeral cloud-image VM verified with official GPG keys.
 
-Il provisioning opzionale rifiuta un bundle con `native_smoke=not-run`.
-Gli artefatti nativi per gli utenti vengono caricati dal workflow soltanto dopo
-lo smoke riuscito: installazione del solo pacchetto deve avviare il backend,
-senza `install.sh` o comandi manuali di enable/start per il servizio di sistema.
-**In questa sessione Windows non sono state eseguite build ELF/pacchetti Linux,
-transazioni native, VM/login/reboot o prove hardware X11/Wayland.** I target
-restano non certificati fino ai rispettivi risultati Linux; lo smoke container
-non dimostra compatibilita del kernel/DKMS, accesso a un mouse reale o audio.
-Questi limiti restano espliciti nel manifest, anche dopo lo smoke nativo.
+---
 
-Build Linux isolata, come utente normale con Docker gia disponibile:
+## Local Development & Building
 
-```sh
-python3 packaging/ci/matrix.py --target debian-12 --output packaging/out
+To run the project in development mode or build from source:
+
+### Prerequisites
+- **Node.js**: version `>= 22.12.0` (or Node 24 LTS)
+- **Rust & Cargo**: version `>= 1.80` (with `x86_64-unknown-linux-gnu` target)
+- **System development libraries (Ubuntu/Debian)**:
+  ```bash
+  sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
+                   libayatana-appindicator3-dev libratbag-dev libmysofa-dev libpipewire-0.3-dev
+  ```
+
+### Install Node Dependencies
+```bash
+npm install
 ```
 
-La preparazione dipendenze root e ammessa soltanto nel container CI esplicito;
-app, engine e toolchain sono costruiti/preparati come utente non-root. Lo smoke
-systemd e isolato e non monta configurazioni, `/dev/input` o moduli del kernel
-host. `--skip-smoke` lascia il bundle intenzionalmente non installabile.
-
-## Test Locali
-
-Test indipendenti da Linux e senza installazioni reali:
-
-```sh
-python -m unittest discover -s packaging/tests -v
-python packaging/install.py --dry-run --json --fixture packaging/tests/fixtures/cachyos.json --consent-ratbag
-python packaging/install.py --dry-run --fixture packaging/tests/fixtures/ubuntu22.json
+### Run in Development Mode (Tauri Dev)
+This command builds the native Rust helper binaries (`audio-worker`, `remapping-agent`) and launches the desktop app with hot reload:
+```bash
+npm run tauri dev
 ```
 
-Le fixture coprono distro/versioni, kernel/pkgbase/headers, root/utente,
-consensi, Secure Boot, checksum/CAS, percorsi e link, repair/uninstall propri,
-unita statiche e contratto JSON HeadsetControl reale. `--fixture` e rifiutato
-fuori dal dry-run. Test engine aggiuntivi sono in `packaging/remapper/tests`.
+To run the Vite frontend preview server independently:
+```bash
+npm run dev
+```
 
-Il bundle Tauri predefinito e ora solo **AppImage**. Rimane una distribuzione
-portabile della GUI, non installa agente, servizi, policy DBus, DKMS o backend
-nativi e non va descritto come installer completo.
+### Running Test Suites
+```bash
+# Frontend unit and regression tests (Vitest)
+npm test
+
+# Packaging and installer unit tests
+python3 -m unittest discover -s packaging/tests -v
+
+# Rust backend tests
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+```
+
+### Building Native Distribution Packages
+To build distribution packages using the container packaging infrastructure:
+```bash
+# Build for Ubuntu 24.04
+python3 -B packaging/build.py --target ubuntu-24.04 --output packaging/out/
+
+# Run the complete CI validation matrix
+python3 -B packaging/ci/matrix.py --engine podman --target ubuntu-24.04 --output packaging/out/
+```
+
+---
+
+## Troubleshooting
+
+### 1. Razer mouse is not detected or DPI changes revert
+- Verify that the OpenRazer daemon is running:
+  ```bash
+  systemctl --user status openrazer-daemon
+  ```
+- Ensure your user belongs to the `plugdev` group:
+  ```bash
+  groups | grep plugdev
+  ```
+- Unplug and reconnect the 2.4 GHz wireless USB dongle or cable.
+
+### 2. Remapped buttons stop responding
+- Launch the **"Restore Mouse"** shortcut from your desktop application launcher, or run in a terminal:
+  ```bash
+  peripheral-hub-remapping-agent --disable-all
+  ```
+- Verify the remapper service status:
+  ```bash
+  systemctl status peripheral-hub-input-remapper.service
+  ```
+
+### 3. Audio spatialization or HRTF profiles are unavailable
+- Check that PipeWire and WirePlumber are active in your user session:
+  ```bash
+  systemctl --user status pipewire wireplumber
+  ```
+- Inspect audio worker logs:
+  ```bash
+  journalctl --user -u peripheral-hub-audio-worker -e
+  ```

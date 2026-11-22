@@ -427,7 +427,7 @@ fn validate_owner(device: &Device) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn watch_changes(sender: tokio::sync::mpsc::UnboundedSender<()>) {
+pub async fn watch_changes(sender: tokio::sync::mpsc::Sender<()>) {
     #[cfg(target_os = "linux")]
     {
         tokio::join!(
@@ -448,6 +448,31 @@ pub async fn watch_changes(sender: tokio::sync::mpsc::UnboundedSender<()>) {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn queue_change(sender: &tokio::sync::mpsc::Sender<()>) -> bool {
+    !matches!(
+        sender.try_send(()),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
+    )
+}
+
+#[cfg(test)]
+mod change_tests {
+    use super::queue_change;
+
+    #[test]
+    fn full_change_queue_coalesces_without_unsubscribing_the_watcher() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        assert!(queue_change(&sender));
+        assert!(queue_change(&sender));
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert!(queue_change(&sender));
+        assert_eq!(receiver.try_recv(), Ok(()));
+        drop(receiver);
+        assert!(!queue_change(&sender));
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{ratbag_identity, read_usb};
 
@@ -464,7 +489,7 @@ mod linux {
         path::{Path, PathBuf},
         time::Duration,
     };
-    use tokio::sync::mpsc::UnboundedSender;
+    use tokio::sync::mpsc::Sender;
     use zbus::{MatchRule, MessageStream};
 
     fn text(path: &Path) -> AppResult<String> {
@@ -760,11 +785,7 @@ mod linux {
         discovery
     }
 
-    pub(super) async fn watch_bus(
-        sender: UnboundedSender<()>,
-        session: bool,
-        services: &[(&str, &str)],
-    ) {
+    pub(super) async fn watch_bus(sender: Sender<()>, session: bool, services: &[(&str, &str)]) {
         let mut retry = Duration::from_secs(1);
         loop {
             if sender.is_closed() {
@@ -798,7 +819,7 @@ mod linux {
                 }
                 if streams.len() == services.len() * 2 {
                     retry = Duration::from_secs(1);
-                    if sender.send(()).is_err() {
+                    if !super::queue_change(&sender) {
                         return;
                     }
                     let mut dirty = false;
@@ -820,10 +841,11 @@ mod linux {
                             _ = sender.closed() => return,
                             message = next => match message {
                                 Some(Ok(_)) => { if !dirty { deadline = tokio::time::Instant::now() + Duration::from_millis(150); } dirty = true; }
-                                _ => { let _ = sender.send(()); break; },
+                                _ => { let _ = super::queue_change(&sender); break; },
                             },
                             _ = tokio::time::sleep_until(deadline), if dirty => {
-                                if sender.send(()).is_err() { return; }
+                                // A queued signal already requests a fresh full discovery.
+                                if !super::queue_change(&sender) { return; }
                                 dirty = false;
                             }
                         }

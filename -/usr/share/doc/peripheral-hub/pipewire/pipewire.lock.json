@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "version": "1.0.5",
+  "patchset": "1ubuntu3.3",
+  "generation": "pipewire-1.0.5-1ubuntu3.3-private-sofa-1",
+  "native_protocol": "0.3",
+  "source": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pipewire/pipewire_1.0.5.orig.tar.bz2",
+    "sha256": "d5e5f3d0b8460e5711c1571c500156fd61768ba55a062eaeb94356abdb955a56",
+    "size": 1698291
+  },
+  "debian": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pipewire/pipewire_1.0.5-1ubuntu3.3.debian.tar.xz",
+    "sha256": "a1650f8e95859b3a8057ea95dad7e0509bfed9896db5b0d17c70910c4e9a3ff0",
+    "size": 51808
+  },
+  "checksum_source": "https://archive.ubuntu.com/ubuntu/pool/main/p/pipewire/pipewire_1.0.5-1ubuntu3.3.dsc",
+  "license": "MIT AND BSD-3-Clause AND LGPL-2.1-or-later"
+}

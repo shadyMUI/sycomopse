@@ -231,7 +231,8 @@ class NativeLifecycleTests(unittest.TestCase):
             report = self.configure("arch", commands, Path(directory) / "state.json", live=False)
             self.assertEqual(report["status"], "pending-boot")
             self.assertIn(["systemctl", "--root=/", "preset", common.ENGINE], commands.calls)
-            self.assertFalse(any("start" in command or command == [native.IMPORT_CHECK, "--check-imports"] for command in commands.calls))
+            self.assertIn([native.IMPORT_CHECK, "--check-imports"], commands.calls)
+            self.assertFalse(any("start" in command for command in commands.calls))
 
     def test_offline_remove_reinstall_restores_enablement_but_never_claims_running(self):
         for format in ("deb", "rpm", "arch"):

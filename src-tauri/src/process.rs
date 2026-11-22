@@ -1,4 +1,5 @@
 use crate::models::{AppError, AppResult, ErrorCode};
+use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "linux", test))]
 use std::process::Stdio;
 use std::time::Duration;
@@ -8,6 +9,14 @@ use tokio::process::{Child, Command};
 const STDOUT_LIMIT: u64 = 16 * 1024 * 1024;
 const STDERR_LIMIT: u64 = 64 * 1024;
 pub const PRIVATE_HEADSETCONTROL: &str = "/usr/lib/peripheral-hub/headsetcontrol";
+
+pub const TRUSTED_SYSTEM_DIRS: &[&str] = &[
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/usr/local/bin",
+];
 
 #[derive(Debug)]
 pub struct ProcessOutput {
@@ -28,6 +37,62 @@ fn allowed(executable: &str) -> bool {
     )
 }
 
+pub fn resolve_executable(executable: &str) -> AppResult<PathBuf> {
+    // 1. Environment variable override support for non-standard environments (DEF-16)
+    let env_override = match executable {
+        "headsetcontrol" | PRIVATE_HEADSETCONTROL => {
+            std::env::var_os("PERIPHERAL_HUB_HEADSETCONTROL_PATH")
+        }
+        "pw-dump" => std::env::var_os("PERIPHERAL_HUB_PWDUMP_PATH"),
+        "wpctl" => std::env::var_os("PERIPHERAL_HUB_WPCTL_PATH"),
+        "systemctl" => std::env::var_os("PERIPHERAL_HUB_SYSTEMCTL_PATH"),
+        _ => None,
+    };
+    if let Some(path) = env_override.map(PathBuf::from) {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
+    // 2. Absolute path validation
+    let path = Path::new(executable);
+    if path.is_absolute() {
+        if executable == PRIVATE_HEADSETCONTROL {
+            return Ok(path.to_path_buf());
+        }
+        if let Some(parent) = path.parent() {
+            if TRUSTED_SYSTEM_DIRS.iter().any(|&dir| Path::new(dir) == parent) {
+                return Ok(path.to_path_buf());
+            }
+        }
+        return Err(AppError::new(
+            ErrorCode::Validation,
+            "Percorso eseguibile assoluto non in directory di sistema autorizzata.",
+        ));
+    }
+
+    // 3. Search trusted system directories (DEF-17 whitelist resolution)
+    for dir in TRUSTED_SYSTEM_DIRS {
+        let candidate = Path::new(dir).join(executable);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    // 4. Fallback search in PATH for NixOS, Guix, and sandboxed test environments
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(executable);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    // If candidate not on disk, return canonical /usr/bin/<exe> so spawn yields NotFound
+    Ok(PathBuf::from(format!("/usr/bin/{executable}")))
+}
+
 pub fn owned_command(executable: &str) -> AppResult<Command> {
     if !allowed(executable) {
         return Err(AppError::new(
@@ -41,7 +106,8 @@ pub fn owned_command(executable: &str) -> AppResult<Command> {
     }
     #[cfg(target_os = "linux")]
     {
-        let mut command = Command::new(executable);
+        let canonical_path = resolve_executable(executable)?;
+        let mut command = Command::new(canonical_path);
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

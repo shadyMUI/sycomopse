@@ -61,10 +61,14 @@ pub fn identities_match(a: &DeviceIdentity, b: &DeviceIdentity) -> bool {
     }
     let a_serial = a.serial.as_deref().and_then(valid_serial);
     let b_serial = b.serial.as_deref().and_then(valid_serial);
-    if a_serial
-        .as_ref()
-        .zip(b_serial.as_ref())
-        .is_some_and(|(a, b)| a != b)
+    let a_dummy = a_serial.as_ref().is_some_and(|s| s.starts_with("UNKWN"));
+    let b_dummy = b_serial.as_ref().is_some_and(|s| s.starts_with("UNKWN"));
+    if !a_dummy
+        && !b_dummy
+        && a_serial
+            .as_ref()
+            .zip(b_serial.as_ref())
+            .is_some_and(|(a, b)| a != b)
     {
         return false;
     }
@@ -79,7 +83,13 @@ pub fn identities_match(a: &DeviceIdentity, b: &DeviceIdentity) -> bool {
         });
     match physical_match {
         Some(matches) => matches,
-        None => a_serial.zip(b_serial).is_some_and(|(a, b)| a == b),
+        None => {
+            if a_dummy || b_dummy {
+                a.vendor_id.is_some() && a.vendor_id == b.vendor_id && a.product_id == b.product_id
+            } else {
+                a_serial.zip(b_serial).is_some_and(|(a, b)| a == b)
+            }
+        }
     }
 }
 

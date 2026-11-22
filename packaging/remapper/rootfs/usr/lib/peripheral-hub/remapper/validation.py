@@ -144,6 +144,8 @@ class Action:
     code: int | None = None
     modifiers: tuple[int, ...] = ()
     key: int | None = None
+    cps: int | None = None
+    button: int | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +216,15 @@ class PresetValidator:
             ):
                 invalid("Chord requires unique numeric modifiers and one allowed non-modifier key")
             return Action(kind, modifiers=tuple(modifiers), key=key)
+        if kind == "autoclicker":
+            exact_fields(value, ("kind", "cps", "button"), "Autoclicker output has unsupported fields")
+            cps = value["cps"]
+            button = value["button"]
+            if not integer(cps, 1, 100):
+                invalid("Autoclicker CPS must be an integer between 1 and 100")
+            if not integer(button, 1, 0x2FF) or button not in self.mouse_codes:
+                invalid("Autoclicker button must be an allowed mouse code")
+            return Action(kind, cps=cps, button=button)
         invalid("Arbitrary macros, scripts and unknown output kinds are forbidden")
 
     def validate(self, data, stem, uid, device):

@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 import re
 
+from inventory import SUPPORTED_SEAT
 from validation import BackendError, integer
 
 
@@ -47,7 +48,7 @@ class Credentials:
             and session.get("type") in ("x11", "wayland")
             and session.get("class") == "user"
             and session.get("state") == "active"
-            and session.get("seat") == "seat0"
+            and session.get("seat") == SUPPORTED_SEAT
             and isinstance(session.get("path"), str)
             and session["path"].startswith("/org/freedesktop/login1/session/")
         )]

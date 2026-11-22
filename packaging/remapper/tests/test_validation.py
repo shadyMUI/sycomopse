@@ -58,6 +58,13 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(modifiers=modifiers, key=key):
                 self.assert_invalid(payload_for(self.mouse, {"kind": "chord", "modifiers": modifiers, "key": key}))
 
+    def test_autoclicker_validation(self):
+        valid = self.validate(payload_for(self.mouse, {"kind": "autoclicker", "cps": 15, "button": 272}))
+        self.assertEqual(valid.bindings[0].output, Action("autoclicker", cps=15, button=272))
+        for invalid_ac in ({"kind": "autoclicker", "cps": 0, "button": 272}, {"kind": "autoclicker", "cps": 101, "button": 272}, {"kind": "autoclicker", "cps": 15, "button": 30}, {"kind": "autoclicker", "cps": 15}):
+            with self.subTest(invalid=invalid_ac):
+                self.assert_invalid(payload_for(self.mouse, invalid_ac))
+
     def test_source_must_belong_to_exact_actual_node_and_origin(self):
         for changed in ({"nodeId": "node-foreign"}, {"originHash": "b" * 32}, {"originHash": None}, {"type": 2}, {"type": True}, {"code": -1}, {"code": 0}, {"code": 30}, {"code": "275"}, {"code": True}, {"code": 2**32}):
             with self.subTest(changed=changed):

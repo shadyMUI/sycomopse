@@ -1,0 +1,9 @@
+dist
+node_modules
+src-tauri
+packaging
+.agents
+.kilo
+coverage
+*.md
+*.txt

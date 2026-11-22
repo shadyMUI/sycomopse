@@ -1,3 +1,5 @@
+%global debug_package %{nil}
+
 Name:           peripheral-hub
 Version:        %{ph_version}
 Release:        1

@@ -1,10 +1,11 @@
 [package]
 name = "peripheral-hub"
+default-run = "peripheral-hub"
 version = "0.1.0"
 description = "Client Linux non ufficiale per periferiche Razer, Logitech e audio PipeWire"
 authors = ["Peripheral Hub contributors"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "MIT"
 
 [lib]
@@ -20,8 +21,12 @@ required-features = ["desktop"]
 name = "peripheral-hub-remapping-agent"
 path = "src/bin/remapping_agent.rs"
 
+[[bin]]
+name = "peripheral-hub-audio-worker"
+path = "src/bin/audio_worker.rs"
+
 [features]
-default = ["desktop"]
+default = ["desktop", "custom-protocol"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
 custom-protocol = ["desktop", "tauri/custom-protocol"]
 
@@ -38,12 +43,10 @@ tokio = { version = "1", features = ["process", "time", "sync", "io-util", "rt-m
 thiserror = "2"
 directories = "6"
 uuid = { version = "1", features = ["v4", "serde"] }
-fs2 = "0.4"
 sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }
-quick-xml = "0.38"
 libc = "0.2"
 
 [dev-dependencies]
