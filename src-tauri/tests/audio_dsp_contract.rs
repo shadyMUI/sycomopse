@@ -685,12 +685,12 @@ async fn pcm_probe(server: &StagedServer, record: &Journal) {
         .unwrap();
     let bytes = std::fs::read(&capture).unwrap();
     assert!(
-        bytes.len() >= 4800 * 2 * 4 && bytes.len() % 8 == 0,
+        bytes.len() >= 4800 * 2 * 4 && bytes.len().is_multiple_of(8),
         "Missing/invalid stereo monitor PCM: {} bytes",
         bytes.len()
     );
     let mut peaks = [0.0_f32; 2];
-    for (index, sample) in bytes.chunks_exact(4).enumerate() {
+    for (index, sample) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let sample = f32::from_le_bytes(sample.try_into().unwrap());
         assert!(sample.is_finite(), "Non-finite DSP output sample");
         peaks[index % 2] = peaks[index % 2].max(sample.abs());
