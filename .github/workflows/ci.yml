@@ -24,7 +24,7 @@ jobs:
       - run: npm test
       - run: npm run build
 
-   backend:
+  backend:
     name: Native Backend Checks & Tests
     runs-on: ubuntu-latest
     steps:
