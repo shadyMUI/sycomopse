@@ -557,21 +557,19 @@ mod linux {
         if let Some(target_rate) = persisted_rate {
             if supported_rates
                 .as_ref()
-                .map_or(true, |rates| rates.contains(&target_rate))
-            {
-                if current_rate.is_none()
+                .is_none_or(|rates| rates.contains(&target_rate))
+                && (current_rate.is_none()
                     || current_rate == Some(0)
-                    || (current_rate == Some(500) && target_rate != 500)
-                {
-                    if api.method(MISC_INTERFACE, "setPollRate", "q", "") {
-                        if let Ok(rate_wire) = u16::try_from(target_rate) {
-                            let _ = bus
-                                .call::<_, ()>(&path, MISC_INTERFACE, "setPollRate", &(rate_wire,))
-                                .await;
-                        }
+                    || (current_rate == Some(500) && target_rate != 500))
+            {
+                if api.method(MISC_INTERFACE, "setPollRate", "q", "") {
+                    if let Ok(rate_wire) = u16::try_from(target_rate) {
+                        let _ = bus
+                            .call::<_, ()>(&path, MISC_INTERFACE, "setPollRate", &(rate_wire,))
+                            .await;
                     }
-                    current_rate = Some(target_rate);
                 }
+                current_rate = Some(target_rate);
             }
         }
         let mut battery_value = None;

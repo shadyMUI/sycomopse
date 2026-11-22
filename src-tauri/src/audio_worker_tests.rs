@@ -150,7 +150,7 @@ fn sofa_paths_are_bounded_binary_data_not_commands() {
 fn decode_lua_string(value: &str) -> Vec<u8> {
     assert!(value.starts_with('"') && value.ends_with('"'));
     value.as_bytes()[1..value.len() - 1]
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|chunk| {
             assert_eq!(chunk[0], b'\\');
             std::str::from_utf8(&chunk[1..])

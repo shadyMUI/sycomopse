@@ -180,7 +180,7 @@ impl DpiValues {
     pub fn contains(&self, value: u32) -> bool {
         match self {
             Self::Range { min, max, step } => {
-                *step > 0 && value >= *min && value <= *max && (value - min) % step == 0
+                *step > 0 && value >= *min && value <= *max && (value - min).is_multiple_of(*step)
             }
             Self::Discrete { values } => values.contains(&value),
             Self::Unknown => false,
