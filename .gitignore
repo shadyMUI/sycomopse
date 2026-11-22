@@ -6,4 +6,4 @@ src-tauri/gen/
 .env.local
 .env.*.local
 coverage/
-.agents/".agents/" 
+.agents/
