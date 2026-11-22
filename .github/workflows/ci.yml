@@ -43,6 +43,7 @@ jobs:
             libmysofa-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
+	  toolchain: stable
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
