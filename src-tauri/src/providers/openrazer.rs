@@ -335,8 +335,7 @@ mod linux {
             let matching_usb: Vec<_> = usb
                 .iter()
                 .filter(|u| {
-                    u.identity.vendor_id == Some(vendor)
-                        && u.identity.product_id == Some(product)
+                    u.identity.vendor_id == Some(vendor) && u.identity.product_id == Some(product)
                 })
                 .collect();
             if matching_usb.len() == 1 {
@@ -490,9 +489,16 @@ mod linux {
                         if x > 0 && y > 0 && (!scalar || x == y) {
                             current_dpi = Some(DpiValue { x, y });
                             if api.method(DPI_INTERFACE, "setDPI", "qq", "") {
-                                if let (Ok(x_wire), Ok(y_wire)) = (u16::try_from(x), u16::try_from(y)) {
+                                if let (Ok(x_wire), Ok(y_wire)) =
+                                    (u16::try_from(x), u16::try_from(y))
+                                {
                                     let _ = bus
-                                        .call::<_, ()>(&path, DPI_INTERFACE, "setDPI", &(x_wire, y_wire))
+                                        .call::<_, ()>(
+                                            &path,
+                                            DPI_INTERFACE,
+                                            "setDPI",
+                                            &(x_wire, y_wire),
+                                        )
                                         .await;
                                 }
                             }
@@ -810,7 +816,11 @@ mod linux {
                         && (active_stage as usize) <= stages.len()
                     {
                         let mut new_stages = stages;
-                        let y_stage = if capability.separate_axes { y_wire } else { x_wire };
+                        let y_stage = if capability.separate_axes {
+                            y_wire
+                        } else {
+                            x_wire
+                        };
                         new_stages[(active_stage - 1) as usize] = (x_wire, y_stage);
                         let _ = bus
                             .call::<_, ()>(
@@ -931,7 +941,10 @@ mod linux {
                 }
             }
         } else if api.method(DPI_INTERFACE, "getDPI", "", "ai") {
-            if let Ok(values) = bus.call::<_, Vec<i32>>(path, DPI_INTERFACE, "getDPI", &()).await {
+            if let Ok(values) = bus
+                .call::<_, Vec<i32>>(path, DPI_INTERFACE, "getDPI", &())
+                .await
+            {
                 if let Ok(dpi) = parse_dpi(&values, false) {
                     if dpi.x > 0 && dpi.y > 0 && device.values.dpi != Some(dpi) {
                         new_dpi = Some(dpi);
@@ -941,7 +954,10 @@ mod linux {
         }
 
         if api.method(MISC_INTERFACE, "getPollRate", "", "i") {
-            if let Ok(val) = bus.call::<_, i32>(path, MISC_INTERFACE, "getPollRate", &()).await {
+            if let Ok(val) = bus
+                .call::<_, i32>(path, MISC_INTERFACE, "getPollRate", &())
+                .await
+            {
                 if let Ok(rate) = u32::try_from(val) {
                     if rate > 0 && device.values.polling_rate != Some(rate) {
                         new_rate = Some(rate);

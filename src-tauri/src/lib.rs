@@ -834,19 +834,28 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
             let mut hardware_changed = false;
             for device in &devices {
                 if device.provider == ProviderKind::Openrazer && device.kind == DeviceKind::Mouse {
-                    if let Some((new_dpi, new_rate)) = crate::providers::openrazer::check_hardware_change(device).await {
-                        sync_state.publish(&sync_app, |snapshot| {
-                            for d in &mut snapshot.devices {
-                                if d.id == device.id || crate::providers::identities_match(&d.identity, &device.identity) {
-                                    if let Some(dpi) = new_dpi {
-                                        d.values.dpi = Some(dpi);
-                                    }
-                                    if let Some(rate) = new_rate {
-                                        d.values.polling_rate = Some(rate);
+                    if let Some((new_dpi, new_rate)) =
+                        crate::providers::openrazer::check_hardware_change(device).await
+                    {
+                        sync_state
+                            .publish(&sync_app, |snapshot| {
+                                for d in &mut snapshot.devices {
+                                    if d.id == device.id
+                                        || crate::providers::identities_match(
+                                            &d.identity,
+                                            &device.identity,
+                                        )
+                                    {
+                                        if let Some(dpi) = new_dpi {
+                                            d.values.dpi = Some(dpi);
+                                        }
+                                        if let Some(rate) = new_rate {
+                                            d.values.polling_rate = Some(rate);
+                                        }
                                     }
                                 }
-                            }
-                        }).await;
+                            })
+                            .await;
                         hardware_changed = true;
                     }
                 }

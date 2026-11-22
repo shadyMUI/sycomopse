@@ -245,9 +245,16 @@ pub struct RemappingCapability {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum MouseAction {
     Default,
-    MouseButton { code: u16 },
-    Key { code: u16 },
-    Chord { modifiers: Vec<u16>, key: u16 },
+    MouseButton {
+        code: u16,
+    },
+    Key {
+        code: u16,
+    },
+    Chord {
+        modifiers: Vec<u16>,
+        key: u16,
+    },
     Autoclicker {
         cps: u32,
         #[serde(default = "default_autoclick_button")]

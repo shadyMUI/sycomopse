@@ -1,3 +1,6 @@
+use super::bridge::*;
+use super::store::*;
+use super::types::*;
 use crate::models::*;
 use crate::profiles::AppPaths;
 use std::collections::{HashMap, HashSet};
@@ -6,9 +9,6 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use super::types::*;
-use super::store::*;
-use super::bridge::*;
 
 pub struct Controller {
     pub store: Store,
@@ -650,4 +650,3 @@ impl Controller {
         release_saved(&self.store, &bridge).await
     }
 }
-

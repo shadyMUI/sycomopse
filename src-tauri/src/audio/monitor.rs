@@ -1,3 +1,6 @@
+use super::controller::AudioEvent;
+#[cfg(target_os = "linux")]
+use super::parser::JsonArrayParser;
 #[cfg(target_os = "linux")]
 use crate::models::{AppError, AppResult, ErrorCode};
 #[cfg(target_os = "linux")]
@@ -9,9 +12,6 @@ use std::time::Duration;
 #[cfg(target_os = "linux")]
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::Sender;
-use super::controller::AudioEvent;
-#[cfg(target_os = "linux")]
-use super::parser::JsonArrayParser;
 
 pub async fn monitor(sender: Sender<AudioEvent>) {
     #[cfg(not(target_os = "linux"))]

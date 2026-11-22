@@ -1,4 +1,6 @@
-use crate::models::{AppError, AppResult, ErrorCode, MouseAction, MouseBinding, RemappingIdentityStrength};
+use crate::models::{
+    AppError, AppResult, ErrorCode, MouseAction, MouseBinding, RemappingIdentityStrength,
+};
 use crate::profiles::{self, AppPaths};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -196,8 +198,14 @@ impl Store {
         if data.schema_version != 1
             || data.identities.len() > MAX_RECOVERY
             || data.disarmed.len() > MAX_RECOVERY
-            || data.identities.iter().any(|identity| !bounded_identifier(identity))
-            || data.disarmed.iter().any(|identity| !data.identities.contains(identity))
+            || data
+                .identities
+                .iter()
+                .any(|identity| !bounded_identifier(identity))
+            || data
+                .disarmed
+                .iter()
+                .any(|identity| !data.identities.contains(identity))
         {
             return Err(invalid("Registro recovery non supportato."));
         }

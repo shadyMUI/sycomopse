@@ -1,7 +1,7 @@
 use crate::models::{
-    AppError, AppResult, AvailabilityCode, DeviceIdentity, Diagnostic, ErrorCode,
-    MouseAction, MouseBinding, ProviderKind, RemappingIdentityStrength,
-    RemappingRuntimeState, RemappingValues, Severity,
+    AppError, AppResult, AvailabilityCode, DeviceIdentity, Diagnostic, ErrorCode, MouseAction,
+    MouseBinding, ProviderKind, RemappingIdentityStrength, RemappingRuntimeState, RemappingValues,
+    Severity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

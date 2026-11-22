@@ -10,13 +10,8 @@ const STDOUT_LIMIT: u64 = 16 * 1024 * 1024;
 const STDERR_LIMIT: u64 = 64 * 1024;
 pub const PRIVATE_HEADSETCONTROL: &str = "/usr/lib/peripheral-hub/headsetcontrol";
 
-pub const TRUSTED_SYSTEM_DIRS: &[&str] = &[
-    "/usr/bin",
-    "/bin",
-    "/usr/sbin",
-    "/sbin",
-    "/usr/local/bin",
-];
+pub const TRUSTED_SYSTEM_DIRS: &[&str] =
+    &["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin"];
 
 #[derive(Debug)]
 pub struct ProcessOutput {
@@ -61,7 +56,10 @@ pub fn resolve_executable(executable: &str) -> AppResult<PathBuf> {
             return Ok(path.to_path_buf());
         }
         if let Some(parent) = path.parent() {
-            if TRUSTED_SYSTEM_DIRS.iter().any(|&dir| Path::new(dir) == parent) {
+            if TRUSTED_SYSTEM_DIRS
+                .iter()
+                .any(|&dir| Path::new(dir) == parent)
+            {
                 return Ok(path.to_path_buf());
             }
         }

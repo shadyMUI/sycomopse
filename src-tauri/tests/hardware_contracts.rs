@@ -1198,12 +1198,14 @@ scroll_active = True
     assert!(seen_headers.contains("[UNKWN000000003606]"));
 
     // Verify parsing precedence on the generated output
-    let (x, y, rate) = providers::openrazer::parse_existing_config(&output, "632517H31000663", None);
+    let (x, y, rate) =
+        providers::openrazer::parse_existing_config(&output, "632517H31000663", None);
     assert_eq!(x, Some(3200));
     assert_eq!(y, Some(3200));
     assert_eq!(rate, Some(1000));
 
-    let (x, y, rate) = providers::openrazer::parse_existing_config(&output, "UNKWN000000000042", None);
+    let (x, y, rate) =
+        providers::openrazer::parse_existing_config(&output, "UNKWN000000000042", None);
     assert_eq!(x, Some(3200));
     assert_eq!(y, Some(3200));
     assert_eq!(rate, Some(1000));
@@ -1231,7 +1233,8 @@ poll_rate = 1000
         Some(DpiValue { x: 2400, y: 2400 }),
         Some(500),
     );
-    let (x, y, rate) = providers::openrazer::parse_existing_config(&output, "UNKWN000000003606", None);
+    let (x, y, rate) =
+        providers::openrazer::parse_existing_config(&output, "UNKWN000000003606", None);
     assert_eq!(x, Some(2400));
     assert_eq!(y, Some(2400));
     assert_eq!(rate, Some(500));
@@ -1244,7 +1247,8 @@ poll_rate = 1000
         Some(DpiValue { x: 3200, y: 3200 }),
         Some(500),
     );
-    let (x2, y2, rate2) = providers::openrazer::parse_existing_config(&output2, "UNKWN000000003606", None);
+    let (x2, y2, rate2) =
+        providers::openrazer::parse_existing_config(&output2, "UNKWN000000003606", None);
     assert_eq!(x2, Some(3200));
     assert_eq!(y2, Some(3200));
     assert_eq!(rate2, Some(500));
@@ -1271,6 +1275,3 @@ fn openrazer_dpi_capability_accepts_get_dpi_stages_as_getter() {
     assert!(cap.writable);
     assert!(cap.reason.is_none());
 }
-
-
-

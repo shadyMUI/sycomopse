@@ -1,7 +1,7 @@
+use super::registry::{id, is_type, property, text_property, Registry};
 use crate::models::{AppError, AppResult, AudioNode, ErrorCode};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use super::registry::{id, is_type, property, text_property, Registry};
 
 pub const CHANNELS_71: [&str; 8] = ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"];
 
@@ -49,7 +49,10 @@ pub fn stereo_target(node: &AudioNode) -> AppResult<()> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-pub(crate) fn verify_graph(registry: &Registry, record: &crate::surround::RestoreRecord) -> AppResult<bool> {
+pub(crate) fn verify_graph(
+    registry: &Registry,
+    record: &crate::surround::RestoreRecord,
+) -> AppResult<bool> {
     if record.core_cookie.is_some() && registry.cookie() != record.core_cookie {
         return Err(AppError::new(
             ErrorCode::AudioUnavailable,

@@ -8,8 +8,12 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 use super::bridge::linux;
-use super::controller::{aggregate_errors, recover_with_paths, release_identities, stop_owned, Controller};
-use super::store::{agent_paths, unchanged_observation, valid_preset_name, validate_bindings, FileLockExt, Store};
+use super::controller::{
+    aggregate_errors, recover_with_paths, release_identities, stop_owned, Controller,
+};
+use super::store::{
+    agent_paths, unchanged_observation, valid_preset_name, validate_bindings, FileLockExt, Store,
+};
 use super::types::{current_uid, RemappingBackend};
 
 #[cfg(any(target_os = "linux", test))]
@@ -347,15 +351,11 @@ pub async fn run_agent(disable_all: bool) -> AppResult<()> {
         return recover_with_paths(paths, linux::Bridge::connect, linux::quiesce_agent).await;
     }
     let mut controller = Controller::new(paths?);
-    let installed_binary = std::env::current_exe()
-        .ok()
-        .is_some_and(|path| {
-            path.parent().is_some_and(|p| {
-                p == Path::new("/usr/bin")
-                    || p == Path::new("/usr/local/bin")
-                    || p == Path::new("/bin")
-            })
-        });
+    let installed_binary = std::env::current_exe().ok().is_some_and(|path| {
+        path.parent().is_some_and(|p| {
+            p == Path::new("/usr/bin") || p == Path::new("/usr/local/bin") || p == Path::new("/bin")
+        })
+    });
     profiles::private_dir(&controller.store.paths.runtime_dir)?;
     let mut options = OpenOptions::new();
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};

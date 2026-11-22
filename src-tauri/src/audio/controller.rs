@@ -1,7 +1,9 @@
 use crate::models::{
     AppError, AppResult, AudioNode, AudioProfile, AudioSnapshot, ErrorCode, SurroundState,
 };
-use crate::profiles::{validate_node_name, validate_profile, AppPaths, APP_NODE_PREFIX, SYSTEM_HRTF};
+use crate::profiles::{
+    validate_node_name, validate_profile, AppPaths, APP_NODE_PREFIX, SYSTEM_HRTF,
+};
 #[cfg(any(target_os = "linux", test))]
 use crate::surround;
 use crate::surround::HrtfSelection;
@@ -30,15 +32,16 @@ pub enum AudioEvent {
     Disconnected,
 }
 
-use super::registry::{is_type, text_property, Registry};
-use super::graph::{same_channels, stereo_target, CHANNELS_71};
-use super::parser::{invalid_dump, JsonArrayParser};
 #[cfg(any(target_os = "linux", test))]
 use super::graph::verify_graph;
+use super::graph::{same_channels, stereo_target, CHANNELS_71};
 #[cfg(all(test, target_os = "linux"))]
 use super::lifecycle_tests;
+use super::parser::{invalid_dump, JsonArrayParser};
+use super::registry::{is_type, text_property, Registry};
 
-pub struct AudioController {    pub paths: AppPaths,
+pub struct AudioController {
+    pub paths: AppPaths,
     pub registry: Registry,
     pub available: bool,
     pub selected_output: Option<String>,

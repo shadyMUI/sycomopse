@@ -113,7 +113,9 @@ mod tests {
                 button: 272,
             },
         };
-        assert!(validate_bindings(std::slice::from_ref(&autoclick), &mouse(), &[29, 46, 272]).is_ok());
+        assert!(
+            validate_bindings(std::slice::from_ref(&autoclick), &mouse(), &[29, 46, 272]).is_ok()
+        );
         let bad_autoclick = MouseBinding {
             button_id: "side".into(),
             action: MouseAction::Autoclicker {
@@ -121,7 +123,12 @@ mod tests {
                 button: 272,
             },
         };
-        assert!(validate_bindings(std::slice::from_ref(&bad_autoclick), &mouse(), &[29, 46, 272]).is_err());
+        assert!(validate_bindings(
+            std::slice::from_ref(&bad_autoclick),
+            &mouse(),
+            &[29, 46, 272]
+        )
+        .is_err());
         assert!(validate_bindings(&[copy.clone(), copy], &mouse(), &[29, 46, 272]).is_err());
     }
 

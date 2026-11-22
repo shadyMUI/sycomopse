@@ -57,12 +57,26 @@ impl Server {
         .await
         .expect("isolated socket was not created");
         let mut sink_cmd = Command::new("/usr/bin/pw-metadata");
-        sink_cmd.args(["-n", "default", "0", "default.configured.audio.sink", r#"{"name":"worker.baseline"}"#, "Spa:String:JSON"]);
+        sink_cmd.args([
+            "-n",
+            "default",
+            "0",
+            "default.configured.audio.sink",
+            r#"{"name":"worker.baseline"}"#,
+            "Spa:String:JSON",
+        ]);
         isolated_environment(&mut sink_cmd, server.directory.path());
         let _ = sink_cmd.status().await;
 
         let mut source_cmd = Command::new("/usr/bin/pw-metadata");
-        source_cmd.args(["-n", "default", "0", "default.configured.audio.source", r#"{"name":"source-kept"}"#, "Spa:String:JSON"]);
+        source_cmd.args([
+            "-n",
+            "default",
+            "0",
+            "default.configured.audio.source",
+            r#"{"name":"source-kept"}"#,
+            "Spa:String:JSON",
+        ]);
         isolated_environment(&mut source_cmd, server.directory.path());
         let _ = source_cmd.status().await;
         server
@@ -391,9 +405,7 @@ async fn isolated_pipewire_proxy_recycling_cubic_default_and_sofa() {
     ] {
         let path = Path::new(candidate);
         if path.is_file() {
-            audio_worker::validate_sofa(path)
-                .await
-                .unwrap();
+            audio_worker::validate_sofa(path).await.unwrap();
             break;
         }
     }

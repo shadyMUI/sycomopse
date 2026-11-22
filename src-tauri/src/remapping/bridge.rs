@@ -1,5 +1,5 @@
-use crate::models::{AppError, AppResult, ErrorCode};
 use super::types::*;
+use crate::models::{AppError, AppResult, ErrorCode};
 use serde::Serialize;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -290,4 +290,3 @@ pub mod linux {
         assert_ne!(AGENT_UNIT, SERVICE);
     }
 }
-
