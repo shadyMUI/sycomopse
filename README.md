@@ -1,13 +1,14 @@
-# Peripheral Hub (sycomopse)
+# Sycomopse
 
-**Peripheral Hub 0.1.0** is a modern, open-source, modular Linux peripheral management suite built with **Tauri 2** and **React 19**. It is designed for centralized configuration of gaming peripherals (mice, keyboards, headsets), advanced spatial audio virtualization, and low-level software/hardware input remapping.
+**Sycomopse 0.1.0** brings mouse settings, button remapping and headset audio into one Linux desktop app built with **Tauri 2** and **React 19**. It is an independent project inspired by the all-in-one approach of Razer Synapse, not an official Razer client. You can use the Mouse or Audio panel on its own; both ship in the same suite.
+
+The Linux package and command names still use `peripheral-hub`. The rename does not change service names or profile directories; existing profiles need no migration.
 
 It provides native integration with key Linux subsystems:
-- **OpenRazer**: advanced support for Razer mice (including 2.4 GHz wireless devices such as the Razer Viper V3 HyperSpeed), multi-stage DPI management, polling rate control (125 / 500 / 1000 Hz), battery percentage, and charging state reporting.
-- **libratbag / ratbagd**: complete support for Logitech, SteelSeries, Roccat, and other compatible mice via D-Bus.
-- **HeadsetControl (4.2.0)**: status monitoring and feature configuration for supported gaming headsets (battery level, sidetone, chatmix, LED controls).
-- **PipeWire / HRTF (libmysofa)**: 7.1 virtual surround sound, binaural HRTF profiles, and real-time audio convolution through a dedicated headless worker.
-- **Input Remapping Engine**: flexible evdev/uinput-level remapping for physical buttons, thumb/side buttons, key bindings, and macros via an isolated service.
+- **OpenRazer and libratbag / ratbagd**: mouse DPI and polling settings where the device and its driver expose verified controls.
+- **HeadsetControl (4.2.0)**: read-only battery reporting for supported Logitech headsets that the app can identify. Sycomopse does not currently set sidetone, chat/game mix or headset LEDs.
+- **PipeWire / WirePlumber**: system audio routing, output volume, microphone gain/mute, a ten-band headphone equalizer, and optional virtual 7.1 playback using a SOFA HRTF.
+- **Input Remapping Engine**: mouse buttons, key bindings, keyboard shortcuts and hold-to-repeat clicks via an isolated evdev/uinput service.
 - **UPower**: unified power and battery level monitoring for standard wireless and Bluetooth peripherals.
 
 The user interface (GUI) and background session agents are licensed under the **MIT License**. The private input remapping engine is an isolated standalone process licensed under the **GPL-3.0** (licenses, attributions, and corresponding source archives are included in every distribution package and bundle).
@@ -31,64 +32,41 @@ The user interface (GUI) and background session agents are licensed under the **
 ## Key Features
 
 ### 🖱️ Mouse Management & Performance
-- **Real-Time DPI Control**: select and switch DPI stages bidirectionally synchronized with the physical buttons on the mouse.
-- **Wireless HyperSpeed Reliability**: robust reading via `getDPIStages` (opcode `0x86`) that prevents USB timeout failures on 2.4 GHz wireless dongles, avoiding unintended resets back to fallback default values (e.g. 1800 DPI).
-- **Polling Rate Switching**: configure polling rates to 125 Hz, 500 Hz, or 1000 Hz with persistent configuration deduplication in `~/.config/openrazer/persistence.conf`.
-- **Battery Status & Monitoring**: live remaining percentage and charging status displayed directly in the dashboard and desktop system tray.
+- Apply supported DPI and polling settings and read back the device state. For the Viper V3 HyperSpeed the polling options are 125, 500 and 1000 Hz; other models depend on their driver.
+- Check battery level and charging status in the dashboard when a provider reports them. Unknown values are not estimates.
 
-### ⌨️ Button Remapping & Macros
-- Remap physical mouse buttons (e.g., thumb buttons 4 & 5) to keyboard keys, function keys, or custom sequences.
+### Button Remapping
+- Remap physical mouse buttons (e.g., thumb buttons 4 & 5) to another click, a key, or a keyboard shortcut. At least one direct left-click must remain available.
+- **Hold to repeat:** choose a target of 1–100 clicks per second for the autoclicker. A quick tap sends one click. The setting is a software target, not a guarantee that every application will register every click.
 - Low-level event injection via a virtual `uinput` device.
 - Instant fallback and fail-safe recovery via the non-root desktop entry **"Restore Mouse"** or CLI command.
 
 ### 🎧 Spatial Audio & Headset Controls
-- **HRTF Virtual Surround**: PipeWire filter-chain integration using SOFA convolution (via `libmysofa`) for precise 3D positional audio.
-- **Headless Audio Worker**: lightweight background helper process (`peripheral-hub-audio-worker`) decoupled from the GUI lifecycle.
-- **HeadsetControl Integration**: battery telemetry and sidetone adjustments for supported headsets without proprietary vendor software.
+- Choose a physical playback output and adjust output volume or microphone gain/mute. These controls belong to the Linux audio session, not the headset firmware.
+- Apply the physical headphones under **Audio → Output** before enabling EQ or surround. If another app changes the default, Sycomopse requires you to confirm the target again rather than silently sending audio to a different device.
+- Enable virtual 7.1 to render multichannel audio as binaural stereo using PipeWire and `libmysofa`. The virtual output receives the application's audio; the physical headphones play it. Apps pinned to another sink are not forcibly moved.
+
+### Headphone equalizer
+1. In **Audio → Headphone equalizer**, start with **Neutral**, **Voice** or **Gaming**, or adjust the ten bands from **31.5 Hz to 16 kHz** (±12 dB). Choose **Apply EQ** to activate it. Once active, gains, presets, preamp and **Advanced: per-band Q** update the existing filter while you listen, without creating another audio output. A lower Q shapes a broader range of frequencies.
+2. **Bypass EQ** compares playback with the saved curve removed. It does not delete your settings or disable active surround. Stereo EQ needs no SOFA file; with 7.1 enabled the same curve processes the two ear signals *after* spatialization. Neither mode processes the microphone.
+3. Settings are remembered per physical PipeWire output. **Audio profiles → New profile → Include equalizer in profile** captures the confirmed bands, preamp and bypass state in a named preset. Existing profiles without an EQ use the target output's saved curve. Startup or plugging in another headset does not silently reapply processing.
+
+**Preamp mode:** **Auto** reserves headroom by subtracting the sum of positive band gains before filtering. **Manual** starts at **0 dB** and lets you set **−24 to 0 dB** without automatic compensation. With Manual at 0 dB, boosts can clip on loud material; lower the preamp if you hear distortion. Existing curves with no preamp setting retain **Auto**.
 
 ---
 
 ## Native Package Installation
 
-Pre-built and verified native packages for all supported Linux distributions are available under:
-```
-packaging/out/
-```
+1. Find your exact **target ID** in the [distribution matrix](#distribution-support-matrix--ci-validation). A package built for another distribution is not interchangeable, even if it uses the same format.
+2. Obtain the **complete bundle** from a successful [Linux Native Packaging workflow](.github/workflows/linux-packaging.yml) run, if available, or [build that target locally](#building-native-distribution-packages). CI artifacts are named `peripheral-hub-0.1.0-<target>-x86_64` and retained for 14 days. `packaging/out/` is generated output, not a directory of prebuilt packages included in a clone.
+3. Extract the bundle and open a terminal in the directory containing **both `install.sh` and `manifest.json`**. Start as your normal desktop user, not with `sudo`:
 
-> [!IMPORTANT]
-> Always install the **specific native package** built for your distribution and version. Do not convert packages across distributions using alien or third-party wrappers. Each package includes the GUI, user session agent, private remapper engine, audio worker, verified HeadsetControl CLI, systemd units, and desktop integration.
+   ```sh
+   sh install.sh install --dry-run
+   sh install.sh install
+   ```
 
-### Distribution Installation Commands (Run from Repository Root)
-
-#### Ubuntu 24.04 LTS (Noble Numbat) / Pop!_OS 24.04
-```bash
-sudo apt install ./packaging/out/peripheral-hub-0.1.0-ubuntu-24.04-x86_64/peripheral-hub_0.1.0-1_amd64.deb
-```
-
-#### Ubuntu 22.04 LTS (Jammy Jellyfish)
-```bash
-sudo apt install ./packaging/out/peripheral-hub-0.1.0-ubuntu-22.04-x86_64/peripheral-hub_0.1.0-1_amd64.deb
-```
-
-#### Fedora 44 / Red Hat Enterprise Linux
-```bash
-sudo dnf install ./packaging/out/peripheral-hub-0.1.0-fedora-44-x86_64/peripheral-hub-0.1.0-1.x86_64.rpm
-```
-
-#### Arch Linux / Manjaro / CachyOS
-```bash
-sudo pacman -U ./packaging/out/peripheral-hub-0.1.0-arch-x86_64/peripheral-hub-0.1.0-1-x86_64.pkg.tar.zst
-```
-
-#### openSUSE (Leap 16.0 / Tumbleweed)
-```bash
-sudo zypper install ./peripheral-hub-0.1.0-1.x86_64.rpm
-```
-
-### Automatic Dependency Resolution
-Your native package manager (`apt`, `pacman`, `dnf`, `zypper`) will automatically resolve all required dependencies:
-- **GUI & Runtime**: WebKitGTK 4.1 (`libwebkit2gtk-4.1`), GTK3, AppIndicator3, Python >= 3.10, Cairo, PyGObject, Pydantic.
-- **Hardware & Audio**: PipeWire, WirePlumber, libmysofa, UPower, libratbag/ratbagd, OpenRazer daemon/DKMS.
+The wrapper checks the manifest and target and uses the native package manager for installation. The `--without-audio` and `--without-openrazer` options affect the wrapper's setup steps; they do **not** produce a smaller package or remove its declared dependencies. In particular, the Ubuntu, Debian, Arch and CachyOS packages currently require OpenRazer/DKMS even if you only use Audio.
 
 ---
 
@@ -98,7 +76,7 @@ The application enforces strict privilege separation across dedicated processes:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Peripheral Hub GUI                       │
+│                      Sycomopse GUI                          │
 │             (Tauri 2 / Rust + React 19 Frontend)            │
 │                 Executed as Standard User                   │
 └──────────────┬───────────────────────────────┬──────────────┘
@@ -150,9 +128,9 @@ Recovery state is maintained in a private ledger separate from user profiles: it
 
 ## User Consents, Drivers & Hardware State
 
-Peripheral Hub never silently changes audio backends or kernel drivers:
-- **No Unsolicited PulseAudio Replacement**: switching audio subsystems to PipeWire/WirePlumber requires explicit user consent.
-- **ratbagd**: device probing and daemon activation require explicit user opt-in.
+Review the installer plan and the package manager's proposed dependencies before proceeding:
+- **Audio session**: the installer asks before switching a PulseAudio setup to PipeWire or replacing the session manager. Installing audio libraries is not the same as switching the running session.
+- **ratbagd**: the installer's explicit activation step is opt-in. Installing the native package can still bring in libratbag or ratbagd as a dependency.
 - **Kernel Headers & DKMS (OpenRazer)**:
   - Kernel headers must match the running kernel version (on Fedora, exact `kernel-devel` is required, not `kernel-debug-devel`; on CachyOS, matching `pkgbase`).
   - If **Secure Boot** is enabled, signing the DKMS module requires MOK enrollment through the distribution's official tooling. Insecure automated keys are never generated.
@@ -166,11 +144,9 @@ Peripheral Hub never silently changes audio backends or kernel drivers:
 
 ## Repair, Verification & Removal
 
-Every distribution bundle folder under `packaging/out/peripheral-hub-0.1.0-<target>-x86_64/` contains an actionable maintenance script:
+From your extracted bundle directory, as the same desktop user:
 
 ```bash
-cd packaging/out/peripheral-hub-0.1.0-ubuntu-24.04-x86_64/
-
 # Verify bundle integrity and check service status
 sh install.sh status
 
@@ -181,29 +157,28 @@ sh install.sh repair
 sh install.sh uninstall
 ```
 
-- `repair`: audits all files against `manifest.json` SHA-256 checksums, reinstalls corrupted or deleted components, and re-validates backend connectivity.
+- `repair`: checks the bundle's manifest, reinstalls the native payload, and reports any remaining service or session setup steps.
 - `uninstall`: stops private background services and removes application binaries while leaving OpenRazer, PipeWire, and personal profiles untouched.
 
 ---
 
 ## Distribution Support Matrix & CI Validation
 
-The packaging pipeline and continuous integration suites certify the following **x86_64** targets running **systemd**:
+The [installer catalog](packaging/targets.json) recognizes the following **mutable x86_64** systems with **systemd** and **Python 3.10 or newer**. These are build targets, not a hardware compatibility guarantee.
 
-| Distribution | Supported Versions | Package Format |
+| Distribution | Bundle target ID | Package format |
 | :--- | :--- | :--- |
-| **Ubuntu LTS** | 22.04 (Jammy), 24.04 (Noble), 26.04 (Resolute) | `.deb` |
-| **Pop!_OS** | 24.04 (Noble host compatibility) | `.deb` |
-| **Debian** | 12 (Bookworm), 13 (Trixie) | `.deb` |
-| **Fedora** | 44 (current target) | `.rpm` |
-| **openSUSE** | Leap 16.0, Tumbleweed (rolling) | `.rpm` |
-| **Arch Linux** | Arch rolling, CachyOS (x86-64 generic) | `.pkg.tar.zst` |
+| Ubuntu LTS 22.04 / 24.04 / 26.04 | `ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-26.04` respectively | `.deb` |
+| Pop!_OS 24.04 with `UBUNTU_CODENAME=noble` | `ubuntu-24.04` (explicit compatibility rule) | `.deb` |
+| Debian 12 / 13 | `debian-12`, `debian-13` respectively | `.deb` |
+| Fedora 44 | `fedora-44` | `.rpm` |
+| Arch Linux (rolling) | `arch` | `.pkg.tar.zst` |
+| CachyOS (rolling) | `cachyos` (not the Arch bundle) | `.pkg.tar.zst` |
+| openSUSE Leap 16.0 / Tumbleweed | `opensuse-leap-16.0`, `opensuse-tumbleweed` respectively | `.rpm` |
 
-> Non-systemd init systems (SysVinit, OpenRC, runit), immutable distributions, NixOS, Alpine, or Void Linux are not officially supported.
+RHEL, Manjaro and unlisted distro versions are not accepted just because they use `dnf`, `pacman` or `apt`. ARM64, immutable systems (such as Fedora Silverblue) and systems without systemd are outside the current packaging targets.
 
-### Testing & Validation Environments
-- **Rootless Podman**: full containerized sandboxing using `keep-id:uid=1000,gid=1000`, user scope with `Delegate=yes`, cgroup v2, and isolated namespaces.
-- **Disposable QEMU VM**: On Ubuntu 24.04, install, upgrade, repair, removal, and autostart hooks are thoroughly validated inside an ephemeral cloud-image VM verified with official GPG keys.
+The [packaging workflow](.github/workflows/linux-packaging.yml) builds each native target in its own distribution image. A passing rootless Podman smoke test verifies package installation, same-version upgrade, repair, removal and service startup. An additional [QEMU harness](packaging/ci/vm.py) is specific to Ubuntu 24.04. Neither a target entry nor a passing package test proves graphical login, DKMS operation on your kernel, physical mouse input or audible headset output.
 
 ---
 
@@ -212,28 +187,29 @@ The packaging pipeline and continuous integration suites certify the following *
 To run the project in development mode or build from source:
 
 ### Prerequisites
-- **Node.js**: version `>= 22.12.0` (or Node 24 LTS)
-- **Rust & Cargo**: version `>= 1.80` (with `x86_64-unknown-linux-gnu` target)
+- **Node.js**: use Node 24 LTS or a version allowed by [`package.json`](package.json).
+- **Rust & Cargo**: Rust 1.90 or newer for `x86_64-unknown-linux-gnu` (the packaging SDK uses Rust 1.91.0).
 - **System development libraries (Ubuntu/Debian)**:
   ```bash
   sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
-                   libayatana-appindicator3-dev libratbag-dev libmysofa-dev libpipewire-0.3-dev
+                    libayatana-appindicator3-dev librsvg2-dev libssl-dev libmysofa-dev \
+                    libpipewire-0.3-dev libspa-0.2-dev
   ```
 
 ### Install Node Dependencies
 ```bash
-npm install
+npm ci
 ```
 
 ### Run in Development Mode (Tauri Dev)
 This command builds the native Rust helper binaries (`audio-worker`, `remapping-agent`) and launches the desktop app with hot reload:
 ```bash
-npm run tauri dev
+npm run tauri -- dev
 ```
 
-To run the Vite frontend preview server independently:
+To run just the frontend with simulated devices and no hardware access:
 ```bash
-npm run dev
+npm run demo
 ```
 
 ### Running Test Suites
@@ -249,12 +225,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 ```
 
 ### Building Native Distribution Packages
-To build distribution packages using the container packaging infrastructure:
+From the repository root, use a normal user account with rootless Podman, systemd cgroup v2 and a delegated user scope. This command builds **one** target and runs its native package checks:
 ```bash
-# Build for Ubuntu 24.04
-python3 -B packaging/build.py --target ubuntu-24.04 --output packaging/out/
-
-# Run the complete CI validation matrix
+# Substitute another target ID from the matrix to build that distribution instead.
 python3 -B packaging/ci/matrix.py --engine podman --target ubuntu-24.04 --output packaging/out/
 ```
 
@@ -283,12 +256,14 @@ python3 -B packaging/ci/matrix.py --engine podman --target ubuntu-24.04 --output
   systemctl status peripheral-hub-input-remapper.service
   ```
 
-### 3. Audio spatialization or HRTF profiles are unavailable
+### 3. The virtual surround output is missing or silent
 - Check that PipeWire and WirePlumber are active in your user session:
   ```bash
   systemctl --user status pipewire wireplumber
   ```
-- Inspect audio worker logs:
-  ```bash
-  journalctl --user -u peripheral-hub-audio-worker -e
-  ```
+- With surround **off**, select your headphones in **Audio → Output**, press **Apply output** if available, and play a stereo track. Then enable 7.1 and check **Physical target**: it must name the headphones, not HDMI or the speakers. Merely selecting a device in the menu does not apply it.
+- Check that the playing application uses the virtual output in the system mixer. To inspect the default nodes and active links without changing the routing:
+   ```bash
+   wpctl status
+   pw-link -l
+   ```

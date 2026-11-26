@@ -36,7 +36,8 @@ pub(crate) enum AudioMutation {
     DefaultOutput(String),
     Volume(String, f64),
     Mute(String, bool),
-    Surround(bool),
+    Surround(bool, Option<String>),
+    Equalizer(String, EqualizerSettings),
     Import(PathBuf),
     Apply(AudioProfile),
 }
@@ -477,7 +478,7 @@ impl AppState {
             let mut audio = self.audio.lock().await;
             self.require_platform()?;
             let requested = match &mutation {
-                AudioMutation::Surround(enabled) => Some(*enabled),
+                AudioMutation::Surround(enabled, _) => Some(*enabled),
                 AudioMutation::Apply(profile) => Some(profile.surround_requested),
                 AudioMutation::DefaultOutput(_)
                     if audio.snapshot().surround_state == SurroundState::On =>
@@ -503,7 +504,12 @@ impl AppState {
                 AudioMutation::DefaultOutput(name) => audio.set_default_output(&name).await,
                 AudioMutation::Volume(name, volume) => audio.set_volume(&name, volume).await,
                 AudioMutation::Mute(name, muted) => audio.set_mute(&name, muted).await,
-                AudioMutation::Surround(enabled) => audio.set_surround(enabled).await,
+                AudioMutation::Surround(enabled, expected) => {
+                    audio.set_surround_for(enabled, expected.as_deref()).await
+                }
+                AudioMutation::Equalizer(name, settings) => {
+                    audio.set_equalizer(&name, &settings).await
+                }
                 AudioMutation::Import(path) => audio.import_hrtf(path).await,
                 AudioMutation::Apply(profile) => audio.apply_profile(&profile).await,
             };
@@ -524,9 +530,10 @@ impl AppState {
                 AudioMutation::Mute(name, muted) => {
                     let _ = (name, muted);
                 }
-                AudioMutation::Surround(enabled) => {
-                    let _ = enabled;
+                AudioMutation::Surround(enabled, expected) => {
+                    let _ = (enabled, expected);
                 }
+                AudioMutation::Equalizer(name, settings) => drop((name, settings)),
                 AudioMutation::Import(path) => drop(path),
                 AudioMutation::Apply(profile) => drop(profile),
             }
@@ -733,7 +740,7 @@ fn menu_event(app: &AppHandle, event: MenuEvent) {
             let state = app.state::<Arc<AppState>>().inner().clone();
             tauri::async_runtime::spawn(async move {
                 let _ = state
-                    .mutate_audio(&app, AudioMutation::Surround(false))
+                    .mutate_audio(&app, AudioMutation::Surround(false, None))
                     .await;
             });
         }
@@ -887,7 +894,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot, commands::refresh_devices, commands::set_dpi,
             commands::set_polling_rate, commands::set_default_output, commands::set_volume,
-            commands::set_mute, commands::set_surround, commands::import_hrtf,
+            commands::set_mute, commands::set_surround, commands::set_equalizer, commands::import_hrtf,
             commands::save_audio_profile, commands::apply_audio_profile, commands::exit_app,
             commands::apply_mouse_remapping, commands::disable_mouse_remapping,
         ])
@@ -916,7 +923,7 @@ pub fn run() {
             let last_click = StdMutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
             let tray = TrayIconBuilder::with_id("peripheral-hub")
                 .icon(tauri::include_image!("icons/32x32.png"))
-                .tooltip("Peripheral Hub")
+                .tooltip("Sycomopse")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(move |tray, event| {
@@ -1000,7 +1007,7 @@ pub fn run() {
         });
     let app = builder
         .build(tauri::generate_context!())
-        .expect("Impossibile avviare Peripheral Hub");
+        .expect("Impossibile avviare Sycomopse");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             let state = app.state::<Arc<AppState>>();

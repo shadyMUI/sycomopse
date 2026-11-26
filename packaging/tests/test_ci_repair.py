@@ -18,6 +18,7 @@ PACKAGING = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGING))
 import build
 import common
+import stage_sidecars
 from ci import dependencies, gates, matrix, smoke, toolchain
 from ci.vm import SOFTWARE_GATES
 
@@ -392,10 +393,27 @@ class SoftwareBuildGateTests(unittest.TestCase):
             self.assertIn("--bin " + binary, helper)
         self.assertEqual(tauri["build"]["beforeDevCommand"], "npm run tauri:dev")
         self.assertEqual(tauri["build"]["beforeBuildCommand"], "npm run tauri:build")
+        self.assertIn("stage_sidecars.py debug", npm["scripts"]["tauri:dev"])
+        self.assertIn("stage_sidecars.py release", npm["scripts"]["tauri:build"])
+        self.assertSetEqual(set(tauri["bundle"]["externalBin"]), {"target/tauri-sidecars/" + b for b in gates.HELPER_BINARIES})
         source = (PACKAGING / "build.py").read_text()
         self.assertIn('"--", "--locked"', source)
         self.assertIn('"audio_worker": {"binary": "usr/bin/peripheral-hub-audio-worker"', source)
         self.assertIn('installer / "build-target.json"', source)
+
+    def test_tauri_sidecars_follow_current_profile_and_custom_cargo_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cargo = root / "custom-cargo-target"
+            (root / "tauri.conf.json").write_bytes((PACKAGING.parent / "src-tauri/tauri.conf.json").read_bytes())
+            for profile in ("debug", "release"):
+                (cargo / profile).mkdir(parents=True)
+                for name in gates.HELPER_BINARIES:
+                    (cargo / profile / name).write_bytes(f"{profile}/{name}".encode())
+                stage_sidecars.stage(cargo, root, profile, "x86_64-unknown-linux-gnu")
+                for name in gates.HELPER_BINARIES:
+                    actual = root / "target/tauri-sidecars" / f"{name}-x86_64-unknown-linux-gnu"
+                    self.assertEqual(actual.read_bytes(), (cargo / profile / name).read_bytes())
 
 
 class SDKDependencyTests(unittest.TestCase):

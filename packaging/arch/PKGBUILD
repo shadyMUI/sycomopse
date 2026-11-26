@@ -3,7 +3,7 @@
 pkgname=peripheral-hub
 pkgver=${PH_VERSION:?Use packaging/build.py to stage and audit the actual payload}
 pkgrel=1
-pkgdesc='Peripheral Hub GUI, user agent and private Input Remapper engine'
+pkgdesc='Sycomopse GUI, user agent and private Input Remapper engine'
 arch=('x86_64')
 url='https://github.com/shadyMUI/sycomopse'
 license=('MIT' 'GPL-3.0-or-later' 'BSD-3-Clause')

@@ -3,7 +3,7 @@
 Name:           peripheral-hub
 Version:        %{ph_version}
 Release:        1
-Summary:        Peripheral Hub GUI, user agent and private remapping engine
+Summary:        Sycomopse GUI, user agent and private remapping engine
 License:        MIT AND GPL-3.0-or-later AND BSD-3-Clause
 URL:            https://github.com/shadyMUI/sycomopse
 Source0:        rootfs.tar.gz

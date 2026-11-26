@@ -2,6 +2,7 @@
 #![allow(unused_imports)]
 
 pub mod controller;
+pub(crate) mod equalizer;
 pub mod graph;
 pub mod monitor;
 pub mod parser;
@@ -197,10 +198,10 @@ mod tests {
             registry.node("alsa_output.headset").unwrap().object_serial,
             Some(200)
         );
-        assert!(!registry
+        assert!(registry
             .removed_serials
             .get(&40)
-            .is_some_and(|serial| *serial >= 200));
+            .is_none_or(|serial| *serial < 200));
         assert!(registry.objects.contains_key(&50));
     }
 
@@ -269,6 +270,7 @@ mod tests {
             .unwrap();
         let session = "4ccf058b-1487-4cda-9b5a-11a6033a5ad0";
         let record = surround::RestoreRecord {
+            stereo_eq: false,
             schema_version: 1,
             session_id: session.into(),
             previous_configured_default: None,

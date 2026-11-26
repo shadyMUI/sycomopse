@@ -553,16 +553,29 @@ class AutoclickTask(Task):
         button = int(self.get_argument("button").get_value())
         period = 1.0 / cps
         press_time = max(0.005, min(0.025, period * 0.3))
-        release_time = max(0.005, period - press_time)
-        while self.is_holding():
+        loop = asyncio.get_running_loop()
+        next_press = loop.time()
+        # Each physical activation owns a first click, even if its release was queued.
+        while True:
             callback(1, button, 1)
-            start = asyncio.get_event_loop().time()
-            while self.is_holding() and (asyncio.get_event_loop().time() - start) < press_time:
-                await asyncio.sleep(min(0.005, press_time))
-            callback(1, button, 0)
-            start = asyncio.get_event_loop().time()
-            while self.is_holding() and (asyncio.get_event_loop().time() - start) < release_time:
-                await asyncio.sleep(min(0.005, release_time))
+            try:
+                await asyncio.sleep(press_time)
+            finally:
+                callback(1, button, 0)
+            if not self.is_holding():
+                return
+
+            next_press += period
+            now = loop.time()
+            if next_press <= now:
+                # Missed a beat: leave an up phase rather than bursting to catch up.
+                next_press = now + (period - press_time)
+            try:
+                await asyncio.wait_for(self._trigger_release_event.wait(), next_press - now)
+                return
+            except asyncio.TimeoutError:
+                if not self.is_holding():  # release and deadline may coincide
+                    return
 
 
 class PrivateEngine:

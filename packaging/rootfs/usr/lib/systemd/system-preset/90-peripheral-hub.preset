@@ -1,2 +1,2 @@
-# Only the private service shipped by Peripheral Hub is enabled.
+# Only the private service shipped by Sycomopse is enabled.
 enable peripheral-hub-input-remapper.service

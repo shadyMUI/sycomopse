@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppError, DpiValues, HubApi, Snapshot } from "./types";
 
-const browserMessage = "Backend unavailable: hardware controls require Peripheral Hub desktop on Linux. This browser does not have the Tauri backend.";
+const browserMessage = "Backend unavailable: hardware controls require Sycomopse desktop on Linux. This browser does not have the Tauri backend.";
 
 function unsupportedSnapshot(): Snapshot {
   return {
@@ -14,6 +14,7 @@ function unsupportedSnapshot(): Snapshot {
       available: false, outputs: [], inputs: [], defaultOutput: null,
       configuredDefaultOutput: null, selectedOutput: null, defaultInput: null,
       surroundState: "off", canEnableSurround: false, surroundReason: browserMessage, hrtf: null,
+      equalizers: {}, equalizerOutput: null, ownedFilterOutput: null,
     },
     profiles: [],
     diagnostics: [{ id: "browser", provider: "app", code: "unsupportedPlatform", severity: "warning", message: browserMessage, detail: null }],
@@ -67,7 +68,8 @@ export function createTauriApi(): HubApi {
     setDefaultOutput: (nodeName) => command("set_default_output", { nodeName }),
     setVolume: (nodeName, volume) => command("set_volume", { nodeName, volume }),
     setMute: (nodeName, muted) => command("set_mute", { nodeName, muted }),
-    setSurround: (enabled) => command("set_surround", { enabled }),
+    setSurround: (enabled, expectedOutput) => command("set_surround", enabled ? { enabled, expectedOutput } : { enabled }),
+    setEqualizer: (nodeName, settings) => command("set_equalizer", { nodeName, settings }),
     importHrtf: () => command("import_hrtf"),
     saveAudioProfile: (profile) => command("save_audio_profile", { profile }),
     applyAudioProfile: (profileId) => command("apply_audio_profile", { profileId }),
@@ -127,7 +129,8 @@ export function createHubApi(): HubApi {
       setDefaultOutput: (nodeName) => getDemo().then((api) => api.setDefaultOutput(nodeName)),
       setVolume: (nodeName, volume) => getDemo().then((api) => api.setVolume(nodeName, volume)),
       setMute: (nodeName, muted) => getDemo().then((api) => api.setMute(nodeName, muted)),
-      setSurround: (enabled) => getDemo().then((api) => api.setSurround(enabled)),
+      setSurround: (enabled, expectedOutput) => getDemo().then((api) => api.setSurround(enabled, expectedOutput)),
+      setEqualizer: (nodeName, settings) => getDemo().then((api) => api.setEqualizer(nodeName, settings)),
       importHrtf: () => getDemo().then((api) => api.importHrtf()),
       saveAudioProfile: (profile) => getDemo().then((api) => api.saveAudioProfile(profile)),
       applyAudioProfile: (profileId) => getDemo().then((api) => api.applyAudioProfile(profileId)),

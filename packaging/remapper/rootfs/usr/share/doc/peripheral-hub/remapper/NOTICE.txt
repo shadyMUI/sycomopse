@@ -1,4 +1,4 @@
-Peripheral Hub private Input Remapper backend
+Sycomopse private Input Remapper backend
 
 The bridge, private engine extension, fetch/staging code, unit, policy and tests
 in packaging/remapper are Copyright (C) 2026 Peripheral Hub contributors and

@@ -66,6 +66,10 @@ def software_gate(work, cargo_target, repo=HERE.parent):
     for label, argv, timeout in commands:
         command_env = dict(env, PERIPHERAL_HUB_TEST_ISOLATED_PIPEWIRE="1") if label == "worker_isolated_pipewire" else env
         run(argv, cwd=repo, env=command_env, capture=False, timeout=timeout)
+        if label == "headless_helpers_debug":
+            # The next desktop cargo test runs tauri-build directly, without npm's beforeDevCommand.
+            run([sys.executable, "-B", str(repo / "packaging/stage_sidecars.py"), "debug"],
+                cwd=repo, env=env, capture=False, timeout=120)
         evidence[label] = "passed"
 
     # Preserve the tests' relative paths without writing vendor/cache into the source rootfs.

@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from "react";
 import type { Device, Snapshot } from "../types";
+import { isOutputApplied, preferredOutputName } from "../audio";
 import { DeviceCard, DeviceIllustration } from "../components/DeviceCard";
 import { NodeControls, OutputSelector, SurroundControl, hasPending } from "../components/Controls";
 import type { MutationControls } from "../components/Controls";
@@ -7,18 +8,18 @@ import { MouseControls } from "./MousePanel";
 
 function QuickAudio({ snapshot, ...controls }: MutationControls & { snapshot: Snapshot }) {
   const audio = snapshot.audio;
-  const initial = audio.selectedOutput ?? audio.defaultOutput ?? audio.outputs[0]?.nodeName ?? "";
+  const initial = preferredOutputName(audio);
   const [outputName, setOutputName] = useState(initial);
   useEffect(() => {
-    setOutputName((current) => audio.outputs.some((node) => node.nodeName === current) ? current : audio.selectedOutput ?? audio.defaultOutput ?? audio.outputs[0]?.nodeName ?? "");
-  }, [audio.outputs, audio.selectedOutput, audio.defaultOutput]);
+    setOutputName((current) => audio.outputs.some((node) => node.nodeName === current) ? current : initial);
+  }, [audio.outputs, initial]);
   const output = audio.outputs.find((node) => node.nodeName === outputName);
   const busy = hasPending(controls.pending, "audio/");
-  const isCurrent = output && output.nodeName === (output.isVirtual ? audio.defaultOutput : audio.selectedOutput);
+  const isCurrent = output && isOutputApplied(audio, output);
   return (
     <section className="panel quick-panel">
       <div className="section-heading"><div><span className="eyebrow">Quick controls</span><h2>Audio</h2></div><span className="small-glyph" aria-hidden="true">))</span></div>
-      <SurroundControl audio={audio} {...controls} />
+      <SurroundControl audio={audio} output={output} {...controls} />
       <div className="control-divider" />
       <OutputSelector outputs={audio.outputs} value={outputName} onChange={setOutputName} disabled={busy || !audio.available} />
       {output && <><p className="node-name mono">{output.nodeName}</p><button className="button button-secondary button-small" disabled={busy || !audio.available || !!isCurrent} onClick={() => { void controls.runMutation("audio/output", () => controls.api.setDefaultOutput(output.nodeName)); }}>Apply output</button><details className="quick-details"><summary>Volume & mute <span>{output.volume === null ? "Not read" : `${Math.round(output.volume * 100)}%`} / {output.muted === null ? "Mute not read" : output.muted ? "Muted" : "Unmuted"}</span></summary><NodeControls key={output.nodeName} node={output} available={audio.available} {...controls} /></details></>}
@@ -38,7 +39,7 @@ const Dashboard = memo(function Dashboard({ snapshot, selectedMouseId, onSelectM
         <div className="panel-stack">
       <section className="overview-hero">
         <div><span className="eyebrow">Your setup, clearly</span><h1>Control.<br /><span>Without the bloat.</span></h1><p>Peripherals and audio in one place.<br />Local. Essential. Unofficial.</p></div>
-        <div className="hero-instrument" aria-hidden="true"><div className="instrument-ring"><span>PH</span><i /><i /><i /><i /></div><span className="instrument-caption">Razer / Logitech / PipeWire</span></div>
+        <div className="hero-instrument" aria-hidden="true"><div className="instrument-ring"><span>SY</span><i /><i /><i /><i /></div><span className="instrument-caption">Razer / Logitech / PipeWire</span></div>
         <div className="hero-metrics"><div><strong>{String(snapshot.devices.length).padStart(2, "0")}</strong><span>Detected devices</span></div><div><strong>{String(physicalOutputs).padStart(2, "0")}</strong><span>Physical outputs</span></div><div><strong className={snapshot.audio.surroundState === "on" ? "accent-text" : ""}>{snapshot.audio.surroundState === "on" ? "7.1" : "OFF"}</strong><span>Binaural surround</span></div></div>
       </section>
           <section className="panel device-section">

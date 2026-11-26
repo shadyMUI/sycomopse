@@ -311,7 +311,7 @@ def choices_for(args, target, facts):
 
 
 def print_plan(plan, manifest, facts):
-    print(f"Peripheral Hub 0.1.0 | {plan['target']} | {plan['action']} | kernel {facts['kernel']}")
+    print(f"Sycomopse 0.1.0 | {plan['target']} | {plan['action']} | kernel {facts['kernel']}")
     if plan.get("compatible_host"):
         host = plan["host_os_release"]
         print(f"Host: {host.get('PRETTY_NAME', host['ID'] + ' ' + host.get('VERSION_ID', ''))}; explicit Noble-base compatibility, not a native Pop build")

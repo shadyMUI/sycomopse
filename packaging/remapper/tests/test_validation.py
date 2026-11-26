@@ -102,10 +102,18 @@ class ValidationTests(unittest.TestCase):
 
     def test_primary_click_cannot_be_lost_and_swap_is_allowed(self):
         self.assert_invalid(payload_for(self.mouse, {"kind": "disabled"}, code=272))
+        self.assert_invalid(payload_for(self.mouse, {"kind": "autoclicker", "cps": 100, "button": 272}, code=272))
         left = payload_for(self.mouse, {"kind": "mouseButton", "code": 273}, code=272)["bindings"][0]
         right = payload_for(self.mouse, {"kind": "mouseButton", "code": 272}, code=273)["bindings"][0]
         validated = self.validate(payload_for(self.mouse, bindings=[left, right]))
         self.assertEqual(len(validated.effective_bindings), 2)
+
+    def test_autoclick_cps_boundaries_match_editor(self):
+        for cps in (1, 80, 100):
+            preset = payload_for(self.mouse, {"kind": "autoclicker", "cps": cps, "button": 272})
+            self.assertEqual(self.validate(preset).effective_bindings[0].output.cps, cps)
+        for cps in (0, 101, 2.5, True):
+            self.assert_invalid(payload_for(self.mouse, {"kind": "autoclicker", "cps": cps, "button": 272}))
 
     def test_auxiliary_left_capability_cannot_replace_primary_passthrough(self):
         mouse = mouse_fixture([raw_node(), replace(raw_node(), node_role="aux", origin_hash="b" * 32, key_codes=(272,), relative_codes=())])

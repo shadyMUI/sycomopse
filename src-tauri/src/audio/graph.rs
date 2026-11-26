@@ -43,7 +43,7 @@ pub fn stereo_target(node: &AudioNode) -> AppResult<()> {
     }
     if !same_channels(&node.channels, &["FL", "FR"]) {
         return Err(AppError::new(ErrorCode::TargetUnavailable,
-            "Il 7.1 binaurale richiede un'uscita stereo FL/FR. Mono/HFP resta disponibile senza surround; nessun profilo Bluetooth viene cambiato."));
+            "EQ e surround richiedono un'uscita stereo FL/FR. Mono/HFP resta disponibile senza effetti; nessun profilo Bluetooth viene cambiato."));
     }
     Ok(())
 }
@@ -104,17 +104,22 @@ pub(crate) fn verify_graph(
             "Identita del filtro cambiata.",
         ));
     }
+    let inputs: &[&str] = if record.stereo_eq {
+        &["FL", "FR"]
+    } else {
+        &CHANNELS_71
+    };
     if input.media_class != "Audio/Sink"
         || playback.media_class != "Stream/Output/Audio"
-        || !same_channels(&input.channels, &CHANNELS_71)
+        || !same_channels(&input.channels, inputs)
         || !same_channels(&playback.channels, &["FL", "FR"])
     {
         return Err(AppError::new(
             ErrorCode::NotConfirmed,
-            "Il filtro non espone un vero ingresso 7.1 e uscita stereo.",
+            "I canali di ingresso e uscita del filtro non corrispondono alla modalità richiesta.",
         ));
     }
-    if !same_channels(&registry.port_channels(input.id, "in"), &CHANNELS_71)
+    if !same_channels(&registry.port_channels(input.id, "in"), inputs)
         || !same_channels(&registry.port_channels(playback.id, "out"), &["FL", "FR"])
         || !same_channels(&registry.port_channels(target.id, "in"), &["FL", "FR"])
     {

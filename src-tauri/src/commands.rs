@@ -1,4 +1,6 @@
-use crate::models::{AppError, AppResult, AudioProfile, ErrorCode, MouseBinding, Snapshot};
+use crate::models::{
+    AppError, AppResult, AudioProfile, EqualizerSettings, ErrorCode, MouseBinding, Snapshot,
+};
 use crate::{request_exit, AppState, AudioMutation};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -109,9 +111,22 @@ pub async fn set_surround(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     enabled: bool,
+    expected_output: Option<String>,
 ) -> AppResult<Snapshot> {
     state
-        .mutate_audio(&app, AudioMutation::Surround(enabled))
+        .mutate_audio(&app, AudioMutation::Surround(enabled, expected_output))
+        .await
+}
+
+#[tauri::command]
+pub async fn set_equalizer(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    node_name: String,
+    settings: EqualizerSettings,
+) -> AppResult<Snapshot> {
+    state
+        .mutate_audio(&app, AudioMutation::Equalizer(node_name, settings))
         .await
 }
 

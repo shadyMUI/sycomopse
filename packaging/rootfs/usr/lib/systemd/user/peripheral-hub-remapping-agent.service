@@ -1,5 +1,5 @@
 [Unit]
-Description=Peripheral Hub mouse remapping agent
+Description=Sycomopse mouse remapping agent
 After=dbus.socket
 StartLimitIntervalSec=60
 StartLimitBurst=3

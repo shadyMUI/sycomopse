@@ -50,16 +50,19 @@ export interface AudioNode {
   vendorId: number | null; productId: number | null; transport: string | null;
 }
 export type SurroundState = "off" | "starting" | "on" | "stopping" | "error";
+export type EqualizerSettings = { enabled: boolean; bands: { gainDb: number; q: number }[]; preampDb?: number | null };
 export interface AudioSnapshot {
   available: boolean; outputs: AudioNode[]; inputs: AudioNode[];
   defaultOutput: string | null; configuredDefaultOutput: string | null;
   selectedOutput: string | null; defaultInput: string | null;
   surroundState: SurroundState; canEnableSurround: boolean; surroundReason: string | null;
+  equalizers: Record<string, EqualizerSettings>; equalizerOutput: string | null; ownedFilterOutput: string | null;
   hrtf: { reference: string; displayName: string; readable: boolean } | null;
 }
 export interface AudioProfile {
   schemaVersion: 1; id: string; name: string; outputNodeName: string; hrtf: string | null;
   volume: number; mute: boolean; surroundRequested: boolean;
+  equalizer?: EqualizerSettings | null;
 }
 export interface Diagnostic {
   id: string; provider: ProviderKind; code: AvailabilityCode; severity: "info" | "warning" | "error";
@@ -81,7 +84,8 @@ export interface HubApi {
   setDefaultOutput(nodeName: string): Promise<Snapshot>;
   setVolume(nodeName: string, volume: number): Promise<Snapshot>;
   setMute(nodeName: string, muted: boolean): Promise<Snapshot>;
-  setSurround(enabled: boolean): Promise<Snapshot>;
+  setSurround(enabled: boolean, expectedOutput?: string): Promise<Snapshot>;
+  setEqualizer(nodeName: string, settings: EqualizerSettings): Promise<Snapshot>;
   importHrtf(): Promise<Snapshot>;
   saveAudioProfile(profile: AudioProfile): Promise<Snapshot>;
   applyAudioProfile(profileId: string): Promise<Snapshot>;

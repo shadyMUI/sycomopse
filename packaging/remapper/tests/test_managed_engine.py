@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 import importlib.util
 from pathlib import Path
+import selectors
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
@@ -519,6 +520,97 @@ class AdapterTests(unittest.TestCase):
     async def settle_macro():
         for _ in range(48):
             await asyncio.sleep(0)
+
+    def autoclick_task(self, cps):
+        click = self.adapter.AutoclickTask()
+        click.get_argument = lambda name: SimpleNamespace(get_value=lambda: {"cps": cps, "button": 273}[name])
+        click._trigger_release_event = asyncio.Event()
+        click.press_trigger = click._trigger_release_event.clear
+        click.release_trigger = click._trigger_release_event.set
+        click.is_holding = lambda: not click._trigger_release_event.is_set()
+        return click
+
+    def test_autoclick_keeps_requested_cadence_without_accumulating_wakeup_delays(self):
+        # Exercise real asyncio timers on a simulated monotonic clock, not wall time in CI.
+        selector = selectors.SelectSelector()
+        loop = asyncio.SelectorEventLoop(selector)
+        self.addCleanup(loop.close)
+        now = 0.0
+
+        def advance(timeout):
+            nonlocal now
+            self.assertIsNotNone(timeout, "The click loop must not wait indefinitely")
+            if timeout > 0:
+                now += timeout + 0.0003  # each nonzero timer wakes up 0.3 ms late
+            return []
+
+        async def measure(cps):
+            click = self.autoclick_task(cps)
+            events = []
+
+            def record(type_, code, value):
+                events.append((now, (type_, code, value)))
+                if len(events) == 16:
+                    click.release_trigger()
+
+            await asyncio.wait_for(click.run(record), 10)
+            self.assertEqual([event for _, event in events], [(1, 273, 1), (1, 273, 0)] * 8)
+            for i, (at, _) in enumerate(events[::2]):
+                self.assertAlmostEqual(at - events[0][0], i / cps, delta=0.0007)
+
+        with patch.object(selector, "select", advance), patch.object(loop, "time", lambda: now):
+            for cps in (1, 25, 40, 45, 50, 80, 100):
+                with self.subTest(cps=cps):
+                    loop.run_until_complete(measure(cps))
+
+    def test_autoclick_queued_quick_taps_each_emit_one_balanced_click(self):
+        outputs = self.adapter.PrivateUInputs(RecordingOutput)
+        mapping = SimpleNamespace(output_code=273, target_uinput="mouse")
+        handler = self.adapter.PrivateMacroHandler((), mapping, outputs, context=None)
+
+        async def taps():
+            handler._macro = self.autoclick_task(80)
+            for value in (1, 0, 1, 0):
+                handler.notify(self.key_event(value))
+            await asyncio.wait_for(handler._runner, 1)
+
+        asyncio.run(taps())
+        self.assertEqual(outputs.get_uinput("mouse").events, [(1, 273, 1), (1, 273, 0)] * 2)
+        self.assertEqual(outputs.owners, {})
+
+    def test_autoclick_release_wakes_the_gap_before_the_next_click(self):
+        async def release_in_gap():
+            click = self.autoclick_task(1)
+            events = []
+
+            def record(*event):
+                events.append(event)
+                if event[-1] == 0:
+                    asyncio.get_running_loop().call_soon(click.release_trigger)
+
+            # A one-second period must not keep a released activation running for a second.
+            await asyncio.wait_for(click.run(record), 0.5)
+            self.assertEqual(events, [(1, 273, 1), (1, 273, 0)])
+
+        asyncio.run(release_in_gap())
+
+    def test_autoclick_cancel_during_press_releases_output(self):
+        async def cancel_press():
+            click = self.autoclick_task(1)
+            events, pressed = [], asyncio.Event()
+
+            def record(*event):
+                events.append(event)
+                pressed.set()
+
+            runner = asyncio.create_task(click.run(record))
+            await asyncio.wait_for(pressed.wait(), 1)
+            runner.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await runner
+            self.assertEqual(events, [(1, 273, 1), (1, 273, 0)])
+
+        asyncio.run(cancel_press())
 
     def test_chord_release_repress_runs_serially_and_keeps_second_hold(self):
         handler, outputs = self.chord_handler()

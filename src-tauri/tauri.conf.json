@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Peripheral Hub",
+  "productName": "Sycomopse",
   "version": "0.1.0",
   "identifier": "io.peripheralhub.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Peripheral Hub",
+        "title": "Sycomopse",
         "width": 1180,
         "height": 800,
         "minWidth": 360,
@@ -30,8 +30,8 @@
     "active": true,
     "targets": ["appimage"],
     "externalBin": [
-      "binaries/peripheral-hub-remapping-agent",
-      "binaries/peripheral-hub-audio-worker"
+      "target/tauri-sidecars/peripheral-hub-remapping-agent",
+      "target/tauri-sidecars/peripheral-hub-audio-worker"
     ],
     "category": "Utility",
     "shortDescription": "Razer and Logitech peripherals, PipeWire audio and 7.1 HRTF",

@@ -1,5 +1,7 @@
 import type { MouseAction, MouseBinding, RemappingCapability } from "./types";
 
+export const autoclickCps = { min: 1, max: 100, default: 10 } as const;
+
 export const mouseButtonNames: Record<number, string> = {
   272: "Left Click",
   273: "Right Click",
@@ -133,8 +135,8 @@ export function remappingProblem(
           return "Shortcut requires allowed modifiers and a single valid key.";
         break;
       case "autoclicker":
-        if (!Number.isInteger(action.cps) || action.cps < 1 || action.cps > 100)
-          return "Autoclicker rate must be between 1 and 100 clicks per second (CPS).";
+        if (!Number.isInteger(action.cps) || action.cps < autoclickCps.min || action.cps > autoclickCps.max)
+          return `Autoclicker rate must be between ${autoclickCps.min} and ${autoclickCps.max} clicks per second (CPS).`;
         if (action.button !== undefined && (!allowed(action.button) || !isMouseButtonCode(action.button)))
           return "Autoclicker button must be a valid mouse button.";
         break;

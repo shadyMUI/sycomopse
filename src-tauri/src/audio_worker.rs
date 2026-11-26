@@ -60,6 +60,20 @@ impl NodeIdentity {
         }
         Ok(())
     }
+
+    fn filter_session(&self) -> AppResult<&str> {
+        let session = self
+            .node_name
+            .strip_prefix(crate::profiles::APP_NODE_PREFIX)
+            .and_then(|name| name.strip_prefix("input."))
+            .filter(|_| self.media_class == "Audio/Sink")
+            .ok_or_else(invalid_request)?;
+        let uuid = uuid::Uuid::parse_str(session).map_err(|_| invalid_request())?;
+        if uuid.to_string() != session {
+            return Err(invalid_request());
+        }
+        Ok(session)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +98,13 @@ enum Operation {
         core_cookie: String,
         #[serde(deserialize_with = "required_option")]
         expected_configured: Option<String>,
+        #[serde(deserialize_with = "required_option")]
+        expected_effective: Option<String>,
+    },
+    SetEqualizer {
+        node: NodeIdentity,
+        core_cookie: String,
+        settings: crate::models::EqualizerSettings,
     },
     ValidateSofa {
         // Unix paths need not be UTF-8. These bytes are data, never shell or Lua code.
@@ -130,16 +151,21 @@ impl Request {
                 node.validate()?;
                 decimal(core_cookie, u32::MAX as u64)?;
                 if (volume.is_none() && muted.is_none())
-                    || volume
-                        .is_some_and(|volume| !volume.is_finite() || !(0.0..=1.0).contains(&volume))
+                    || volume.is_some_and(|v| !(0.0..=10.0).contains(&v))
                 {
                     return Err(invalid_request());
+                }
+                // A handoff may inherit an externally amplified value. This must
+                // never extend the volume range on physical nodes or unrelated sinks.
+                if volume.is_some_and(|v| v > 1.0) {
+                    node.filter_session()?;
                 }
             }
             Operation::SetDefault {
                 node,
                 core_cookie,
                 expected_configured,
+                expected_effective,
             } => {
                 decimal(core_cookie, u32::MAX as u64)?;
                 if let Some(node) = node {
@@ -148,7 +174,7 @@ impl Request {
                         return Err(invalid_request());
                     }
                 }
-                if let Some(name) = expected_configured {
+                for name in expected_configured.iter().chain(expected_effective) {
                     validate_node_name(name)?;
                 }
             }
@@ -158,6 +184,19 @@ impl Request {
                     || path[0] != b'/'
                     || path.contains(&0)
                 {
+                    return Err(invalid_request());
+                }
+            }
+            Operation::SetEqualizer {
+                node,
+                core_cookie,
+                settings,
+            } => {
+                node.validate()?;
+                node.filter_session()?;
+                decimal(core_cookie, u32::MAX as u64)?;
+                settings.validate()?;
+                if !settings.enabled {
                     return Err(invalid_request());
                 }
             }
@@ -316,17 +355,32 @@ pub async fn set_mute(node: &AudioNode, core_cookie: &str, muted: bool) -> AppRe
     .await
 }
 
-// expected_configured=None means the observed baseline is an automatic default,
-// not "ignore the baseline". PipeWire metadata does not offer a server-side CAS.
+// For either baseline, None means that metadata key was absent, not "ignore it".
+// PipeWire metadata does not offer a server-side CAS.
 pub async fn set_default(
     node: Option<&AudioNode>,
     core_cookie: &str,
     expected_configured: Option<&str>,
+    expected_effective: Option<&str>,
 ) -> AppResult<()> {
     invoke(Request::new(Operation::SetDefault {
         node: node.map(NodeIdentity::from_node).transpose()?,
         core_cookie: core_cookie.into(),
         expected_configured: expected_configured.map(str::to_owned),
+        expected_effective: expected_effective.map(str::to_owned),
+    })?)
+    .await
+}
+
+pub(crate) async fn set_equalizer(
+    node: &AudioNode,
+    core_cookie: &str,
+    settings: &crate::models::EqualizerSettings,
+) -> AppResult<()> {
+    invoke(Request::new(Operation::SetEqualizer {
+        node: NodeIdentity::from_node(node)?,
+        core_cookie: core_cookie.into(),
+        settings: settings.clone(),
     })?)
     .await
 }
@@ -428,11 +482,13 @@ fn render_lua(request: &Request) -> AppResult<String> {
     request.validate()?;
     let node_table = |node: &NodeIdentity| {
         format!(
-            "{{id={},serial={},name={},class={}}}",
+            "{{id={},serial={},name={},class={},session={}}}",
             node.id,
             lua_string(&node.object_serial),
             lua_string(&node.node_name),
-            lua_string(&node.media_class)
+            lua_string(&node.media_class),
+            node.filter_session()
+                .map_or_else(|_| "nil".into(), lua_string),
         )
     };
     let prefix = match &request.request {
@@ -461,7 +517,9 @@ fn render_lua(request: &Request) -> AppResult<String> {
             node,
             core_cookie,
             expected_configured,
+            expected_effective,
         } => {
+            let baseline = |name: Option<&str>| name.map_or_else(|| "nil".into(), lua_string);
             let name_json = node
                 .as_ref()
                 .map(|node| {
@@ -471,10 +529,29 @@ fn render_lua(request: &Request) -> AppResult<String> {
                 })
                 .transpose()?
                 .unwrap_or_else(|| "nil".into());
-            format!("local request={{operation=\"setDefault\",node={},cookie={},expected={},name_json={}}}\n",
-                node.as_ref().map(node_table).unwrap_or_else(|| "nil".into()),
-                lua_string(core_cookie), expected_configured.as_deref().map(lua_string)
-                    .unwrap_or_else(|| "nil".into()), name_json)
+            format!(
+                "local request={{operation=\"setDefault\",node={},cookie={},\
+                 expected_configured={},expected_effective={},name_json={name_json}}}\n",
+                node.as_ref()
+                    .map(node_table)
+                    .unwrap_or_else(|| "nil".into()),
+                lua_string(core_cookie),
+                baseline(expected_configured.as_deref()),
+                baseline(expected_effective.as_deref())
+            )
+        }
+        Operation::SetEqualizer {
+            node,
+            core_cookie,
+            settings,
+        } => {
+            use std::fmt::Write;
+            let mut controls = String::new();
+            for (name, value) in settings.controls() {
+                write!(controls, "{},{value:e},", lua_string(&name))
+                    .map_err(|_| invalid_request())?;
+            }
+            format!("local request={{operation=\"setEqualizer\",node={},cookie={},controls={{{controls}}}}}\n", node_table(node), lua_string(core_cookie))
         }
         Operation::ValidateSofa { .. } => return Err(invalid_request()),
     };

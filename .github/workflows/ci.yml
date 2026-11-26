@@ -55,6 +55,8 @@ jobs:
           workspaces: src-tauri
       - name: Rust format check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Stage matching Tauri sidecars for native checks
+        run: npm run native:helpers && python3 -B packaging/stage_sidecars.py debug
       - name: Clippy check
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Cargo tests

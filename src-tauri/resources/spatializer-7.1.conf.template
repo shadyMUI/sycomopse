@@ -26,7 +26,7 @@
   "context.properties": {
     "core.daemon": false,
     "log.level": 2,
-    "application.name": "Peripheral Hub Surround",
+    "application.name": "Sycomopse Surround",
     "application.id": "io.peripheralhub.desktop",
     "peripheral-hub.session": {{SESSION}}
   },
@@ -42,8 +42,8 @@
     {
       "name": "libpipewire-module-filter-chain",
       "args": {
-        "node.description": "Peripheral Hub 7.1 binaurale",
-        "media.name": "Peripheral Hub 7.1 binaurale",
+        "node.description": "Sycomopse 7.1 binaurale",
+        "media.name": "Sycomopse 7.1 binaurale",
         "filter.graph": {
           "nodes": [
             { "type": "sofa", "label": "spatializer", "name": "spFL", "config": { "filename": {{SOFA_PATH}}, "gain": 1.0 }, "control": { "Azimuth": 30.0, "Elevation": 0.0, "Radius": 3.0 } },
@@ -72,7 +72,7 @@
         },
         "capture.props": {
           "node.name": {{INPUT_NAME}},
-          "node.description": "Peripheral Hub 7.1 binaurale",
+          "node.description": "Sycomopse 7.1 binaurale",
           "media.class": "Audio/Sink",
           "node.virtual": true,
           "node.autoconnect": false,

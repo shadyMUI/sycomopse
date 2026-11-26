@@ -19,8 +19,8 @@
     "test:watch": "vitest",
     "native:helpers": "cargo build --locked --manifest-path src-tauri/Cargo.toml --no-default-features --bin peripheral-hub-remapping-agent --bin peripheral-hub-audio-worker",
     "native:helpers:build": "npm run native:helpers -- --release",
-    "tauri:dev": "npm run native:helpers && npm run dev",
-    "tauri:build": "npm run native:helpers:build && npm run build",
+    "tauri:dev": "npm run native:helpers && python3 -B packaging/stage_sidecars.py debug && npm run dev",
+    "tauri:build": "npm run native:helpers:build && python3 -B packaging/stage_sidecars.py release && npm run build",
     "tauri": "tauri"
   },
   "dependencies": {

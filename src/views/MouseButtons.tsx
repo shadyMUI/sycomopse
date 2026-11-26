@@ -3,7 +3,7 @@ import type { KeyboardEvent } from "react";
 import type { Device, MouseAction, MouseBinding, RemappingValues } from "../types";
 import type { MutationControls } from "../components/Controls";
 import { Toggle, availabilityNames, hasPending, providerNames } from "../components/Controls";
-import { isModifierCode, isMouseButtonCode, keyboardCodes, keyCodeLabel, mediaKeyNames, modifierGroups, mouseActionLabel, remappingProblem } from "../remapping";
+import { autoclickCps, isModifierCode, isMouseButtonCode, keyboardCodes, keyCodeLabel, mediaKeyNames, modifierGroups, mouseActionLabel, remappingProblem } from "../remapping";
 
 type ActionKind = MouseAction["kind"] | "media";
 interface BindingDraft {
@@ -25,7 +25,7 @@ function savedDraft(device: Device) {
         kind: action.kind === "key" && mediaKeyNames[action.code] ? "media" : action.kind,
         code: "code" in action ? action.code : action.kind === "chord" ? action.key : null,
         modifiers: action.kind === "chord" ? [...action.modifiers] : [],
-        cps: action.kind === "autoclicker" ? action.cps : 10,
+        cps: action.kind === "autoclicker" ? action.cps : autoclickCps.default,
         autoclickButton: action.kind === "autoclicker" ? (action.button ?? 272) : 272,
       };
     }),
@@ -43,7 +43,7 @@ function compileBindings(drafts: BindingDraft[]): MouseBinding[] {
       case "autoclicker":
         action = {
           kind: "autoclicker",
-          cps: Math.max(1, Math.min(50, Math.round(draft.cps ?? 10))),
+          cps: draft.cps ?? autoclickCps.default,
           button: draft.autoclickButton ?? 272,
         };
         break;
@@ -140,6 +140,7 @@ export default function MouseButtons({ device, api, pending, runMutation }: Muta
         {capability?.buttons.map((button, index) => {
           const binding = draft.bindings.find((entry) => entry.buttonId === button.id);
           if (!binding) return null;
+          const cps = binding.cps ?? autoclickCps.default;
           const prefix = `${id}-button-${index}`;
           const targetCodes = binding.kind === "mouseButton" ? mouseCodes : binding.kind === "media" ? mediaCodes : binding.kind === "chord" ? mainCodes : keyCodes;
           const saved = observed?.bindings.find((entry) => entry.buttonId === button.id)?.action ?? { kind: "default" };
@@ -149,7 +150,7 @@ export default function MouseButtons({ device, api, pending, runMutation }: Muta
             <div className="binding-fields">
               <div className="select-field"><label htmlFor={`${prefix}-action`}>Action for {button.label}</label>
                 <select id={`${prefix}-action`} value={binding.kind} disabled={disabled} onChange={(event) => {
-                  cancelRecording(); changeBinding(button.id, { kind: event.target.value as ActionKind, code: null, modifiers: [], cps: 10, autoclickButton: 272 });
+                  cancelRecording(); changeBinding(button.id, { kind: event.target.value as ActionKind, code: null, modifiers: [], cps: autoclickCps.default, autoclickButton: 272 });
                 }}>
                   <option value="default">Default</option><option value="mouseButton" disabled={mouseCodes.length === 0}>Mouse click</option>
                   <option value="key" disabled={keyCodes.length === 0}>Key</option><option value="media" disabled={mediaCodes.length === 0}>Media</option>
@@ -171,18 +172,18 @@ export default function MouseButtons({ device, api, pending, runMutation }: Muta
             {binding.kind === "autoclicker" && <div className="autoclicker-container">
               <div className="field-heading">
                 <label htmlFor={`${prefix}-cps`}>Autoclicker speed (CPS)</label>
-                <output id={`${prefix}-cps-output`}>{binding.cps ?? 10} CPS</output>
+                <output id={`${prefix}-cps-output`}>{cps} CPS</output>
               </div>
-              <input id={`${prefix}-cps`} type="range" className="range-input" min={1} max={50} step={1}
-                value={binding.cps ?? 10} disabled={disabled}
-                style={{ "--range-fill": `${(((binding.cps ?? 10) - 1) / 49) * 100}%` } as React.CSSProperties}
+              <input id={`${prefix}-cps`} type="range" className="range-input" min={autoclickCps.min} max={autoclickCps.max} step={1}
+                value={cps} disabled={disabled}
+                style={{ "--range-fill": `${((cps - autoclickCps.min) / (autoclickCps.max - autoclickCps.min)) * 100}%` } as React.CSSProperties}
                 onChange={(event) => changeBinding(button.id, { cps: Number(event.target.value) })} />
               <div className="range-bounds">
-                <span>1 CPS (slow)</span>
-                <span>25 CPS</span>
-                <span>50 CPS (maximum)</span>
+                <span>{autoclickCps.min} CPS (slow)</span>
+                <span>{autoclickCps.max / 2} CPS</span>
+                <span>{autoclickCps.max} CPS (maximum)</span>
               </div>
-              <p className="control-hint">Holding {button.label || `button ${button.code}`}, will repeat {keyCodeLabel(binding.autoclickButton ?? 272)} at {binding.cps ?? 10} clicks per second.</p>
+              <p className="control-hint">Hold {button.label || `button ${button.code}`} to repeat {keyCodeLabel(binding.autoclickButton ?? 272)}. Target: {cps} clicks per second.</p>
             </div>}
             {binding.kind === "chord" && <>
               <div className="chord-modifiers" role="group" aria-label={`Modifiers for ${button.label}`}>

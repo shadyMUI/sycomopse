@@ -72,7 +72,7 @@ pub mod linux {
         }
 
         pub async fn connect() -> AppResult<Self> {
-            let bus = Bus::active(SERVICE, false).await.map_err(|error| AppError::new(error.code, "Backend di rimappatura non disponibile: installare o riparare i servizi Peripheral Hub.").detail(error.message))?;
+            let bus = Bus::active(SERVICE, false).await.map_err(|error| AppError::new(error.code, "Backend di rimappatura non disponibile: installare o riparare i servizi Sycomopse.").detail(error.message))?;
             let bridge = Self { bus };
             let xml: String = bridge
                 .call("org.freedesktop.DBus.Introspectable", "Introspect", &())

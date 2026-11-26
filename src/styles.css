@@ -319,6 +319,15 @@ input::placeholder { color: #777777; }
 .routing-readback { padding: 15px 16px; background: #1a1a1a; border-left: 2px solid #485543; margin-top: 23px; }
 .routing-readback strong { display: block; font-size: 11px; font-weight: 400; margin-top: 7px; line-height: 1.7; }
 .routing-readback code { display: block; font-size: 11px; color: #b4b4b4; margin-top: 6px; line-height: 1.7; }
+.eq-target { overflow-wrap: anywhere; }
+.eq-bands { border-top: 1px solid var(--line); }
+.eq-band { display: grid; grid-template-columns: 8ch minmax(0, 1fr) 8ch; align-items: center; gap: 12px; border-bottom: 1px solid #2e2e2e; color: #c8c8c8; font: 12px var(--mono); }
+.eq-band input { min-width: 0; width: 100%; height: 32px; margin: 0; accent-color: var(--accent); }
+.eq-value { text-align: right; color: #dedede; }
+.eq-preamp { margin: 20px 0; padding: 15px 16px; background: #1a1a1a; border-left: 2px solid #485543; }
+.eq-preamp .field-heading { margin: 0; }
+.eq-preamp input[type="range"] { display: block; width: 100%; height: 36px; margin: 3px 0; accent-color: var(--accent); }
+.eq-preamp .control-hint { margin: 7px 0 0; }
 .spatial-visual { position: relative; width: 235px; height: 211px; margin: 10px auto 23px; display: grid; place-items: center; }
 .spatial-visual .device-illustration { width: 160px; height: 151px; opacity: .65; }
 .spatial-visual.active .device-illustration { opacity: 1; }

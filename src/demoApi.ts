@@ -1,5 +1,6 @@
-import type { AppError, AudioNode, AudioProfile, Device, HubApi, Snapshot } from "./types";
+import type { AppError, AudioNode, AudioProfile, AudioSnapshot, Device, HubApi, Snapshot } from "./types";
 import { isDpiValueAllowed } from "./api";
+import { filterTargetReason, isOutputApplied, isStereoOutput, managedFilterPrefix, validEqualizer } from "./audio";
 import { keyboardCodes, mouseButtonNames, remappingProblem } from "./remapping";
 
 function clone<T>(value: T): T {
@@ -11,7 +12,7 @@ function demoError(message: string): never {
   throw { code: "demoValidation", message, detail: "Simulated data validation; no hardware commands executed." } satisfies AppError;
 }
 
-export function createDemoApi(count = 3): HubApi {
+export function createDemoApi(count = 3, initialAudio?: AudioSnapshot): HubApi {
   if (!Number.isInteger(count) || count < 0 || count > 24) demoError("Invalid number of demo devices (0-24).");
   const now = Math.floor(Date.now() / 1000);
   const identity = {
@@ -97,13 +98,15 @@ export function createDemoApi(count = 3): HubApi {
     ...baseNode, id: 80, objectSerial: 1080, nodeName: "alsa_input.pci-0000_00_1f.3.analog-stereo",
     description: "Microphone Input - Built-in Audio", mediaClass: "Audio/Source", channels: ["MONO"], volume: 0.5,
   };
+  const systemHrtf = { reference: "system", displayName: "Sample HRTF (simulated)", readable: true };
   let state: Snapshot = {
     revision: 1, platform: "linux", demo: true, devices,
-    audio: {
+    audio: initialAudio ? clone(initialAudio) : {
       available: true, outputs, inputs: [microphone], defaultOutput: selected.nodeName,
       configuredDefaultOutput: selected.nodeName, selectedOutput: selected.nodeName, defaultInput: microphone.nodeName,
       surroundState: "off", canEnableSurround: true, surroundReason: null,
-      hrtf: { reference: "system", displayName: "Sample HRTF (simulated)", readable: true },
+      equalizers: {}, equalizerOutput: null, ownedFilterOutput: null,
+      hrtf: systemHrtf,
     },
     profiles: [{ schemaVersion: 1, id: "8238c480-03a2-4d61-80c5-e6c4ddf7ce14", name: "Stereo listening", outputNodeName: selected.nodeName, hrtf: "system", volume: 0.6, mute: false, surroundRequested: false }],
     diagnostics: [
@@ -116,8 +119,9 @@ export function createDemoApi(count = 3): HubApi {
     ],
   };
   const listeners = new Set<(snapshot: Snapshot) => void>();
-  const hrtfs = new Map([["system", clone(state.audio.hrtf!)]]);
-  const virtualName = "peripheral-hub.demo.surround-7.1";
+  const hrtfs = new Map([[systemHrtf.reference, systemHrtf]]);
+  if (state.audio.hrtf) hrtfs.set(state.audio.hrtf.reference, state.audio.hrtf);
+  const virtualName = `${managedFilterPrefix}input.demo`;
 
   function commit(change: (next: Snapshot) => void): Snapshot {
     const next = clone(state);
@@ -140,22 +144,48 @@ export function createDemoApi(count = 3): HubApi {
     return found;
   }
 
-  function surround(next: Snapshot, enabled: boolean): void {
-    if (enabled) {
-      const target = next.audio.outputs.find((entry) => entry.nodeName === next.audio.selectedOutput && !entry.isVirtual);
-      if (!next.audio.canEnableSurround || !target || target.channels.length !== 2 || !next.audio.hrtf?.readable) demoError("Surround not available for the selected target or HRTF.");
-      if (!next.audio.outputs.some((entry) => entry.nodeName === virtualName)) {
-        next.audio.outputs.push({ ...clone(baseNode), id: 501, objectSerial: 1501, nodeName: virtualName, description: "Peripheral Hub - 7.1 Input (simulated)", channels: ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"], isVirtual: true, transport: "Virtual (demo)" });
+  function removeFilter(audio: AudioSnapshot): void {
+    audio.outputs = audio.outputs.filter((entry) => entry.nodeName !== virtualName);
+    audio.ownedFilterOutput = null;
+    audio.equalizerOutput = null;
+    audio.surroundState = "off";
+  }
+
+  function route(next: Snapshot, output: AudioNode, surround: boolean, equalize: boolean): void {
+    const audio = next.audio;
+    if (surround || equalize) {
+      if (!isStereoOutput(output)) demoError("A physical stereo output is required.");
+      let sink = audio.outputs.find((entry) => entry.nodeName === virtualName);
+      if (!sink) {
+        sink = { ...clone(baseNode), id: 501, objectSerial: 1501, nodeName: virtualName, isVirtual: true, transport: "Virtual (demo)" };
+        audio.outputs.push(sink);
       }
-      next.audio.surroundState = "on";
-      next.audio.defaultOutput = virtualName;
-      next.audio.configuredDefaultOutput = virtualName;
+      sink.description = surround ? "Sycomopse - 7.1 Input (simulated)" : "Sycomopse - Stereo EQ (simulated)";
+      sink.channels = surround ? ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"] : ["FL", "FR"];
+      audio.defaultOutput = virtualName;
+      audio.ownedFilterOutput = output.nodeName;
+      audio.equalizerOutput = equalize ? output.nodeName : null;
+      audio.surroundState = surround ? "on" : "off";
     } else {
-      next.audio.outputs = next.audio.outputs.filter((entry) => entry.nodeName !== virtualName);
-      next.audio.surroundState = "off";
-      next.audio.defaultOutput = next.audio.outputs.find((entry) => entry.nodeName === next.audio.selectedOutput)?.nodeName ?? next.audio.outputs.find((entry) => !entry.isVirtual)?.nodeName ?? null;
-      next.audio.configuredDefaultOutput = next.audio.defaultOutput;
+      removeFilter(audio);
+      audio.defaultOutput = output.nodeName;
     }
+    audio.configuredDefaultOutput = audio.defaultOutput;
+    audio.selectedOutput = output.isVirtual ? null : output.nodeName;
+  }
+
+  function stopSurround(next: Snapshot): void {
+    const audio = next.audio;
+    if (audio.surroundState !== "on") return;
+    const output = audio.outputs.find((entry) => entry.nodeName === audio.ownedFilterOutput);
+    if (output && isOutputApplied(audio, output)) {
+      route(next, output, false, audio.equalizerOutput === output.nodeName);
+      return;
+    }
+    // Release only our sink. An external effective or configured default takes precedence.
+    removeFilter(audio);
+    if (audio.configuredDefaultOutput === virtualName) audio.configuredDefaultOutput = null;
+    if (audio.defaultOutput === virtualName) audio.defaultOutput = audio.configuredDefaultOutput ?? audio.outputs.find((entry) => !entry.isVirtual)?.nodeName ?? null;
   }
 
   function validateProfile(next: Snapshot, profile: AudioProfile): AudioNode {
@@ -164,7 +194,8 @@ export function createDemoApi(count = 3): HubApi {
     const output = next.audio.outputs.find((entry) => entry.nodeName === profile.outputNodeName && !entry.isVirtual);
     if (!output) demoError("Profile's physical output is not available.");
     if (profile.hrtf !== null && !hrtfs.get(profile.hrtf)?.readable) demoError("HRTF reference not available in demo.");
-    if (profile.surroundRequested && (!profile.hrtf || !hrtfs.get(profile.hrtf)?.readable || output.channels.length !== 2)) demoError("7.1 profile requires a readable HRTF and stereo output.");
+    if (profile.surroundRequested && (!profile.hrtf || !hrtfs.get(profile.hrtf)?.readable || !isStereoOutput(output))) demoError("7.1 profile requires a readable HRTF and stereo output.");
+    if (profile.equalizer != null && (!isStereoOutput(output) || !validEqualizer(profile.equalizer))) demoError("An EQ profile needs a physical stereo output plus valid bands and preamp settings.");
     return output;
   }
 
@@ -217,10 +248,8 @@ export function createDemoApi(count = 3): HubApi {
       return commit((next) => {
         const output = next.audio.outputs.find((entry) => entry.nodeName === nodeName);
         if (!output) demoError("Audio output not available.");
-        if (output.isVirtual && next.audio.surroundState !== "on") demoError("Virtual node requires active surround.");
-        if (!output.isVirtual) next.audio.selectedOutput = nodeName;
-        next.audio.defaultOutput = next.audio.surroundState === "on" ? virtualName : nodeName;
-        next.audio.configuredDefaultOutput = next.audio.defaultOutput;
+        if (nodeName === virtualName) demoError("Apply a physical output, not its managed filter.");
+        route(next, output, false, isStereoOutput(output) && next.audio.equalizers[nodeName]?.enabled === true);
       });
     },
     async setVolume(nodeName, volume) {
@@ -237,10 +266,32 @@ export function createDemoApi(count = 3): HubApi {
         target.muted = muted;
       });
     },
-    async setSurround(enabled) { return commit((next) => surround(next, enabled)); },
+    async setSurround(enabled, expectedOutput) {
+      return commit((next) => {
+        const audio = next.audio;
+        if (!enabled) return stopSurround(next);
+        const output = audio.outputs.find((entry) => entry.nodeName === audio.selectedOutput);
+        if (!output) demoError("Physical output unavailable.");
+        if (output.nodeName !== expectedOutput || filterTargetReason(audio, output)) demoError("Apply output before enabling surround.");
+        if (!audio.canEnableSurround || !audio.hrtf?.readable) demoError("Surround requires a readable HRTF.");
+        route(next, output, true, audio.equalizers[output.nodeName]?.enabled === true);
+      });
+    },
+    async setEqualizer(nodeName, settings) {
+      return commit((next) => {
+        const audio = next.audio;
+        const output = audio.outputs.find((entry) => entry.nodeName === nodeName);
+        const reason = filterTargetReason(audio, output);
+        if (!output || reason) demoError(reason ?? "Physical output unavailable.");
+        if (!validEqualizer(settings)) demoError("EQ requires ten bands (gain -12 to +12 dB, Q 0.4 to 4) and an Auto or manual preamp (-24 to 0 dB).");
+        audio.equalizers[nodeName] = clone(settings);
+        if (settings.enabled && audio.equalizerOutput === nodeName) return;
+        if (settings.enabled || audio.ownedFilterOutput !== null) route(next, output, audio.surroundState === "on", settings.enabled);
+      });
+    },
     async importHrtf() {
       return commit((next) => {
-        if (next.audio.surroundState === "on") surround(next, false);
+        stopSurround(next);
         next.audio.hrtf = { reference: "975c10a0-f67e-478e-94a6-bcad73bce14c.sofa", displayName: "Imported SOFA (simulated)", readable: true };
         hrtfs.set(next.audio.hrtf.reference, clone(next.audio.hrtf));
       });
@@ -258,7 +309,6 @@ export function createDemoApi(count = 3): HubApi {
         const profile = next.profiles.find((entry) => entry.id === profileId);
         if (!profile) demoError("Profile not found.");
         const output = validateProfile(next, profile);
-        next.audio.selectedOutput = output.nodeName;
         if (profile.hrtf !== null) {
           const targetHrtf = hrtfs.get(profile.hrtf);
           if (!targetHrtf) {
@@ -266,8 +316,10 @@ export function createDemoApi(count = 3): HubApi {
           }
           next.audio.hrtf = clone(targetHrtf);
         }
-        surround(next, profile.surroundRequested);
-        const volumeTarget = profile.surroundRequested ? node(next, virtualName) : output;
+        if (profile.equalizer != null) next.audio.equalizers[output.nodeName] = clone(profile.equalizer);
+        const equalize = next.audio.equalizers[output.nodeName]?.enabled === true;
+        route(next, output, profile.surroundRequested, equalize);
+        const volumeTarget = profile.surroundRequested || equalize ? node(next, virtualName) : output;
         volumeTarget.volume = profile.volume;
         volumeTarget.muted = profile.mute;
       });

@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { createDemoApi, createTauriApi } from "../api";
+import { equalizerPresets } from "../audio";
 import type { HubApi, Snapshot } from "../types";
+import { audioView, dashboard } from "./appHarness";
 
 function clone(snapshot: Snapshot): Snapshot { return JSON.parse(JSON.stringify(snapshot)) as Snapshot; }
 
@@ -26,11 +28,6 @@ function controlledApi(initial: Snapshot) {
     }),
   };
   return { api, emit(next: Snapshot) { current = clone(next); for (const listener of listeners) listener(clone(next)); } };
-}
-
-async function dashboard(api: HubApi) {
-  render(<App api={api} />);
-  await screen.findByRole("heading", { name: /(?:Your setup|Il tuo setup)/ });
 }
 
 describe("dashboard dinamica e confine demo", () => {
@@ -381,6 +378,32 @@ describe("pulsanti rilevati, bozze e privacy", () => {
     expect(apply).toHaveBeenLastCalledWith("demo-viper-1", [{ buttonId: "button-276", action: { kind: "disabled" } }], false, false);
   });
 
+  it("non riduce i CPS di un profilo salvato quando cambia un altro pulsante", async () => {
+    const api = createDemoApi(1);
+    const id = (await api.getSnapshot()).devices[0].id;
+    const saved = { buttonId: "button-275", action: { kind: "autoclicker" as const, cps: 80, button: 273 } };
+    await api.applyMouseRemapping(id, [saved], false, false);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Action for Extra Side Button" }), "disabled");
+    await user.click(panel.getByRole("button", { name: "Apply buttons" }));
+    expect(apply).toHaveBeenCalledWith(id, [saved, { buttonId: "button-276", action: { kind: "disabled" } }], false, false);
+  });
+
+  it("permette di selezionare e applicare 100 CPS dalla GUI", async () => {
+    const api = createDemoApi(1);
+    const apply = vi.spyOn(api, "applyMouseRemapping");
+    const { user, panel } = await buttonsView(api);
+    await user.selectOptions(panel.getByRole("combobox", { name: "Action for Side Button" }), "autoclicker");
+    const speed = panel.getByRole("slider", { name: "Autoclicker speed (CPS)" });
+    expect(speed).toHaveAttribute("min", "1");
+    expect(speed).toHaveAttribute("max", "100");
+    fireEvent.change(speed, { target: { value: "100" } });
+    expect(apply).not.toHaveBeenCalled();
+    await user.click(panel.getByRole("button", { name: "Apply buttons" }));
+    expect(apply).toHaveBeenCalledWith("demo-viper-1", [{ buttonId: "button-275", action: { kind: "autoclicker", cps: 100, button: 272 } }], false, false);
+  });
+
   it("non consente di perdere tutte le vie al clic sinistro, ma permette di spostarlo", async () => {
     const api = createDemoApi(1);
     const apply = vi.spyOn(api, "applyMouseRemapping");
@@ -720,12 +743,13 @@ describe("audio confermato e profili espliciti", () => {
     expect(apply).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /(?:Import SOFA HRTF|Importa HRTF SOFA)/ }));
     expect(importHrtf).toHaveBeenCalledWith();
+    const importedHrtf = (await api.getSnapshot()).audio.hrtf!.reference;
     await user.click(screen.getByText(/(?:New profile|Nuovo profilo)/, { selector: "summary" }));
     await user.type(screen.getByLabelText(/(?:Profile name|Nome del profilo)/), "Spaziale");
     fireEvent.change(screen.getByRole("slider", { name: /(?:Desired volume|Volume desiderato)/ }), { target: { value: "90" } });
     await user.click(screen.getByRole("switch", { name: /(?:Desired surround in profile|Surround desiderato nel profilo)/ }));
     await user.click(screen.getByRole("button", { name: /(?:Save profile|Salva profilo)/ }));
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1, name: "Spaziale", volume: 0.9, surroundRequested: true }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1, name: "Spaziale", volume: 0.9, surroundRequested: true, hrtf: importedHrtf }));
     expect(apply).not.toHaveBeenCalled();
     expect(screen.getByRole("switch", { name: "Surround 7.1" })).not.toBeChecked();
     await user.click(await screen.findByRole("button", { name: /(?:Apply profile Spaziale|Applica profilo Spaziale)/ }));
@@ -733,6 +757,140 @@ describe("audio confermato e profili espliciti", () => {
     await waitFor(() => expect(screen.getByRole("switch", { name: "Surround 7.1" })).toBeChecked());
     expect(screen.getByRole("slider", { name: /(?:Output volume|Volume uscita)/ })).toHaveValue("68");
   });
+});
+
+describe("filter routing and readback", () => {
+  it.each(["Dashboard", "Audio"])("requires Apply output in %s when an external default supersedes the last selection", async (view) => {
+    const initial = await createDemoApi().getSnapshot();
+    const target = initial.audio.selectedOutput!;
+    const external = initial.audio.outputs.find((node) => node.nodeName !== target)!.nodeName;
+    initial.audio.defaultOutput = external; // The configured default and last selection are both stale.
+    const { api, emit } = controlledApi(initial);
+    const setOutput = vi.spyOn(api, "setDefaultOutput");
+    const setSurround = vi.spyOn(api, "setSurround");
+    const setEq = vi.spyOn(api, "setEqualizer");
+    const user = userEvent.setup();
+    await dashboard(api);
+    if (view === "Audio") await user.click(screen.getByRole("tab", { name: /Audio/ }));
+    const picker = screen.getByRole("combobox", { name: "Audio output" });
+    const apply = screen.getByRole("button", { name: "Apply output" });
+    const surround = screen.getByRole("switch", { name: "Surround 7.1" });
+    expect(picker).toHaveValue(target);
+    expect(apply).toBeEnabled();
+    expect(surround).toBeDisabled();
+    expect(surround).toHaveAccessibleDescription(/Apply output/);
+    if (view === "Audio") {
+      const applyEq = screen.getByRole("button", { name: "Apply EQ" });
+      expect(applyEq).toBeDisabled();
+      expect(applyEq).toHaveAccessibleDescription(/Apply output/);
+      await user.click(applyEq);
+    }
+    await user.click(surround);
+    await user.selectOptions(picker, external);
+    expect(surround).toBeDisabled(); // Effective default matches, but the native target still does not.
+    await user.selectOptions(picker, target);
+    expect(setOutput).not.toHaveBeenCalled();
+    expect(setSurround).not.toHaveBeenCalled();
+    expect(setEq).not.toHaveBeenCalled();
+    const pendingDefault = clone(initial);
+    pendingDefault.revision++;
+    pendingDefault.audio.defaultOutput = target;
+    pendingDefault.audio.configuredDefaultOutput = external;
+    act(() => emit(pendingDefault));
+    expect(apply).toBeEnabled();
+    expect(surround).toBeDisabled();
+    expect(surround).toHaveAccessibleDescription(/Apply output/);
+    if (view === "Audio") expect(screen.getByRole("button", { name: "Apply EQ" })).toBeDisabled();
+    await user.click(apply);
+    expect(setOutput).toHaveBeenCalledWith(target);
+    expect(apply).toBeDisabled();
+    await user.click(surround);
+    expect(setSurround).toHaveBeenCalledWith(true, target);
+  });
+
+  it("does not mistake an external virtual default or an ineligible node for a physical EQ target", async () => {
+    const base = createDemoApi();
+    const target = (await base.getSnapshot()).audio.selectedOutput!;
+    const initial = await base.setEqualizer(target, { enabled: true, bands: equalizerPresets[1].bands });
+    const external = { ...initial.audio.outputs.find((node) => node.isVirtual)!, nodeName: "external.virtual", description: "External mixer" };
+    initial.audio.outputs.push(external);
+    initial.audio.defaultOutput = external.nodeName;
+    const { api, emit } = controlledApi(initial);
+    const { user, eq } = await audioView(api);
+    expect(screen.getByRole("button", { name: "Apply output" })).toBeEnabled();
+    expect(eq.getByRole("button", { name: "Bypass EQ" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Surround 7.1" })).toHaveAccessibleDescription(/Apply output/);
+    const picker = screen.getByRole("combobox", { name: "Audio output" });
+    await user.selectOptions(picker, external.nodeName);
+    expect(eq.queryByRole("button", { name: "Apply EQ" })).not.toBeInTheDocument();
+    await user.selectOptions(picker, target);
+    let revision = initial.revision;
+    for (const change of [{ channels: ["MONO"] }, { channels: ["FC", "LFE"] }, { objectSerial: null }, { mediaClass: "Audio/Source" }]) {
+      const next = clone(initial);
+      next.revision = ++revision;
+      Object.assign(next.audio.outputs.find((node) => node.nodeName === target)!, change);
+      act(() => emit(next));
+      expect(eq.getByText(/Select an identifiable physical stereo output/)).toBeVisible();
+      expect(eq.queryByRole("slider")).not.toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Surround 7.1" })).toBeDisabled();
+    }
+  });
+
+  it("cancels a live EQ write if an external default becomes pending before dispatch", async () => {
+    const base = createDemoApi();
+    const target = (await base.getSnapshot()).audio.selectedOutput!;
+    const initial = await base.setEqualizer(target, { enabled: true, bands: equalizerPresets[0].bands });
+    const { api, emit } = controlledApi(initial);
+    const write = vi.spyOn(api, "setEqualizer");
+    const { eq } = await audioView(api);
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(eq.getByRole("slider", { name: "31.5 Hz gain" }), { target: { value: "5" } });
+      const moved = clone(initial);
+      moved.revision++;
+      moved.audio.configuredDefaultOutput = moved.audio.outputs.find((node) => !node.isVirtual && node.nodeName !== target)!.nodeName;
+      act(() => emit(moved));
+      expect(eq.getByRole("button", { name: "Bypass EQ" })).toHaveAccessibleDescription(/Apply output/);
+      act(() => emit({ ...initial, revision: moved.revision + 1 }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows EQ without SOFA, blocks competing writes and preserves a draft across a rejected write and readback", async () => {
+    const initial = await createDemoApi().getSnapshot();
+    initial.audio.hrtf = null;
+    initial.audio.canEnableSurround = false;
+    const { api, emit } = controlledApi(initial);
+    let reject!: (error: Error) => void;
+    const write = vi.spyOn(api, "setEqualizer").mockImplementation(() => new Promise<Snapshot>((_, fail) => { reject = fail; }));
+    const { user, eq } = await audioView(api);
+    const preset = eq.getByRole("combobox", { name: "EQ preset" });
+    expect(screen.getByRole("switch", { name: "Surround 7.1" })).toBeDisabled();
+    await user.selectOptions(preset, "Gaming");
+    const apply = eq.getByRole("button", { name: "Apply EQ" });
+    await user.click(apply);
+    expect(write).toHaveBeenCalledWith(initial.audio.selectedOutput, { enabled: true, bands: equalizerPresets[2].bands });
+    expect(apply).toBeDisabled();
+    expect(preset).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Audio output" })).toBeDisabled();
+    const next = clone(initial);
+    next.revision++;
+    next.audio.equalizers[initial.audio.selectedOutput!] = { enabled: false, bands: equalizerPresets[1].bands };
+    act(() => emit(next));
+    await user.click(apply);
+    await act(async () => { reject(new Error("Output changed before apply.")); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Output changed before apply.");
+    expect(eq.getByText("EQ bypassed")).toBeVisible();
+    expect(preset).toHaveValue("Gaming");
+    expect(apply).toBeEnabled();
+    expect(write).toHaveBeenCalledOnce();
+    await user.click(eq.getByRole("button", { name: "Discard EQ edits" }));
+    expect(preset).toHaveValue("Voice");
+  });
+
 });
 
 describe("revisioni, hotplug e lifecycle", () => {

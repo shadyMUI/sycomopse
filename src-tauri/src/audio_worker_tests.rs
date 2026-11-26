@@ -1,4 +1,38 @@
 use super::*;
+
+#[test]
+fn only_an_owned_virtual_filter_can_preserve_amplified_volume() {
+    fn request(node_name: &str, class: &str, volume: f64) -> AppResult<Request> {
+        Request::new(Operation::SetLevel {
+            node: NodeIdentity {
+                id: 23,
+                object_serial: "24".into(),
+                node_name: node_name.into(),
+                media_class: class.into(),
+            },
+            core_cookie: "1".into(),
+            volume: Some(volume),
+            muted: Some(true),
+        })
+    }
+    let own = "peripheral-hub.surround.input.a08e93f6-8a14-45fa-b116-9132609afe43";
+    assert!(request("alsa_output.headphones", "Audio/Sink", 1.0).is_ok());
+    assert!(request("alsa_output.headphones", "Audio/Sink", 1.25).is_err());
+    assert!(request(
+        "peripheral-hub.surround.input.not-a-session",
+        "Audio/Sink",
+        1.25
+    )
+    .is_err());
+    assert!(request(own, "Audio/Source", 1.25).is_err());
+    let request_ok = request(own, "Audio/Sink", 1.25).unwrap();
+    assert!(render_lua(&request_ok)
+        .unwrap()
+        .contains("volume=1.25000000000000000"));
+    for invalid in [-0.1, 10.001, f64::INFINITY, f64::NAN] {
+        assert!(request(own, "Audio/Sink", invalid).is_err());
+    }
+}
 use serde_json::{json, Value};
 
 fn node() -> NodeIdentity {
@@ -20,11 +54,16 @@ fn level(volume: f64, muted: bool) -> Request {
     .unwrap()
 }
 
-fn default(node: Option<NodeIdentity>, baseline: Option<&str>) -> Request {
+fn default(
+    node: Option<NodeIdentity>,
+    configured: Option<&str>,
+    effective: Option<&str>,
+) -> Request {
     Request::new(Operation::SetDefault {
         node,
         core_cookie: u32::MAX.to_string(),
-        expected_configured: baseline.map(str::to_owned),
+        expected_configured: configured.map(str::to_owned),
+        expected_effective: effective.map(str::to_owned),
     })
     .unwrap()
 }
@@ -62,11 +101,42 @@ fn request_schema_is_closed_and_bounded() {
     bytes.extend_from_slice(b" {}");
     assert!(Request::parse(&bytes).is_err());
     assert!(Request::parse(&vec![b' '; MAX_REQUEST_BYTES + 1]).is_err());
-    let value = serde_json::to_value(default(None, None)).unwrap();
-    for field in ["node", "expectedConfigured"] {
+    let value = serde_json::to_value(default(None, None, None)).unwrap();
+    Request::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    for field in ["node", "expectedConfigured", "expectedEffective"] {
+        assert_eq!(value["request"].get(field), Some(&Value::Null));
         let mut invalid = value.clone();
         invalid["request"].as_object_mut().unwrap().remove(field);
         assert!(Request::parse(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn default_baselines_are_independent_validated_node_names() {
+    let configured = "a".repeat(512);
+    let effective = "active.\"\\';error('bad')--";
+    let value = serde_json::to_value(default(None, Some(&configured), Some(effective))).unwrap();
+    assert_eq!(value["request"]["expectedConfigured"], configured);
+    assert_eq!(value["request"]["expectedEffective"], effective);
+    let request = Request::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let script = render_lua(&request).unwrap();
+    let prefix = script.strip_suffix(CONTROL_SCRIPT).unwrap();
+    assert!(prefix.contains(&format!(
+        "expected_configured={},expected_effective={},",
+        lua_string(&configured),
+        lua_string(effective)
+    )));
+    for field in ["expectedConfigured", "expectedEffective"] {
+        let mut invalid = value.clone();
+        for name in [json!(""), json!("x\n"), json!("a".repeat(513)), json!(3)] {
+            invalid["request"][field] = name;
+            assert_eq!(
+                Request::parse(&serde_json::to_vec(&invalid).unwrap())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Validation
+            );
+        }
     }
 }
 
@@ -113,6 +183,7 @@ fn exact_decimal_identity_and_safe_level_ranges() {
         node: Some(source),
         core_cookie: "1".into(),
         expected_configured: None,
+        expected_effective: None,
     })
     .is_err());
     assert!(Request::new(Operation::SetLevel {
@@ -182,7 +253,7 @@ fn lua_and_json_quotes_cannot_become_script_syntax() {
         assert!(!script.contains("os.execute('bad')"));
         assert!(script.contains(&lua_string(&u64::MAX.to_string())));
     }
-    let script = render_lua(&default(Some(node()), None)).unwrap();
+    let script = render_lua(&default(Some(node()), None, None)).unwrap();
     let prefix = script.strip_suffix(CONTROL_SCRIPT).unwrap();
     let encoded = prefix
         .split("name_json=")
@@ -546,28 +617,32 @@ async fn lua_proxy_identity_and_readback_contracts() {
             "{scenario}: {result:?}"
         );
     }
-    for scenario in [
-        "default",
-        "baseline-change",
-        "clear",
-        "malformed-default",
-        "structured-default",
-        "duplicate-node",
-        "metadata-replace",
+    let configured = Some("baseline");
+    let effective = Some("automatic.sink");
+    for (scenario, target, configured, effective) in [
+        ("default", Some(node()), None, None),
+        ("default", Some(node()), None, effective),
+        ("default", Some(node()), configured, None),
+        ("clear", None, configured, effective),
+        ("baseline-change", Some(node()), configured, effective),
+        ("effective-change", Some(node()), None, effective),
+        ("effective-change", None, configured, None),
+        ("effective-removed", Some(node()), configured, effective),
+        ("malformed-effective", Some(node()), None, None),
+        ("malformed-default", Some(node()), configured, effective),
+        ("structured-default", Some(node()), configured, effective),
+        ("duplicate-node", Some(node()), configured, effective),
+        ("metadata-replace", Some(node()), configured, effective),
     ] {
-        let request = if scenario == "clear" {
-            default(None, Some("baseline"))
-        } else {
-            default(Some(node()), Some("baseline"))
-        };
+        let request = default(target, configured, effective);
         let output = run_lua_scenario(&request, scenario, CONTROL_SCRIPT).await;
         assert!(output.success, "{scenario}: {}", output.stderr);
-        let result = Response::parse(&output.stdout, true);
-        assert_eq!(
-            result.is_ok(),
-            matches!(scenario, "default" | "clear"),
-            "{scenario}: {result:?}"
-        );
+        let result = Response::parse(&output.stdout, true).map_err(|error| error.code);
+        let expected = match scenario {
+            "default" | "clear" => Ok(()),
+            _ => Err(ErrorCode::NotConfirmed),
+        };
+        assert_eq!(result, expected, "{scenario}");
     }
 }
 
@@ -586,7 +661,21 @@ async fn lua_guard_mutations_are_detected() {
             "properties[\"object.serial\"] ~= request.node.serial or",
             "false or",
         ),
-        ("baseline-change", "previous ~= request.expected", "false"),
+        (
+            "baseline-change",
+            "configured ~= request.expected_configured",
+            "false",
+        ),
+        (
+            "effective-change",
+            "effective ~= request.expected_effective",
+            "false",
+        ),
+        (
+            "malformed-effective",
+            "not configured_valid or not effective_valid",
+            "not configured_valid",
+        ),
         (
             "acp-lower-before-unmute",
             "volume = phase.volume, mute = phase.mute",
@@ -596,7 +685,9 @@ async fn lua_guard_mutations_are_detected() {
         assert_eq!(CONTROL_SCRIPT.matches(needle).count(), 1);
         let mutated = CONTROL_SCRIPT.replace(needle, replacement);
         let request = match scenario {
-            "baseline-change" => default(Some(node()), Some("baseline")),
+            "baseline-change" => default(Some(node()), Some("baseline"), Some("automatic.sink")),
+            "effective-change" => default(Some(node()), None, Some("automatic.sink")),
+            "malformed-effective" => default(Some(node()), None, None),
             "acp-lower-before-unmute" => level(0.1, false),
             _ => level(0.25, true),
         };

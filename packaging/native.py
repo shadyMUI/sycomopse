@@ -213,7 +213,7 @@ def main():
                 raise PackagingError("Native payload imports were not verified")
             configure_checkpoint(args.format, STATUS, "complete")
             for message in result["pending"]:
-                print("Peripheral Hub: " + message, file=sys.stderr)
+                print("Sycomopse: " + message, file=sys.stderr)
         else:
             remove(args.format)
     except (PackagingError, OSError, ValueError) as error:
@@ -222,7 +222,7 @@ def main():
                 configure_checkpoint(args.format, STATUS, "failed", error)
             except (PackagingError, OSError, ValueError) as persistence_error:
                 print("Native failure checkpoint preserved/unwritable: " + str(persistence_error), file=sys.stderr)
-        print("Peripheral Hub native configuration failed: " + str(error), file=sys.stderr)
+        print("Sycomopse native configuration failed: " + str(error), file=sys.stderr)
         return 1
     return 0
 

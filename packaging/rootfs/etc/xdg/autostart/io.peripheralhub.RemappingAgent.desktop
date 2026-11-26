@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Peripheral Hub Remapping Agent
+Name=Sycomopse Remapping Agent
 Comment=Restore this user's explicitly configured mouse bindings
 Exec=systemctl --user start peripheral-hub-remapping-agent.service
 TryExec=systemctl

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { isDpiValueAllowed, parseDpiDraft } from "../api";
+import { filterTargetReason } from "../audio";
 import type { AudioNode, AudioSnapshot, AvailabilityCode, Battery, Device, DpiCapability, HubApi, ProviderKind, Snapshot } from "../types";
 
 export type RunMutation = (key: string, operation: () => Promise<Snapshot>) => Promise<boolean>;
@@ -192,18 +193,24 @@ export function NodeControls({ node, input = false, available, api, pending, run
   );
 }
 
-export function SurroundControl({ audio, api, pending, runMutation }: MutationControls & { audio: AudioSnapshot }) {
+export function SurroundControl({ audio, output, api, pending, runMutation }: MutationControls & { audio: AudioSnapshot; output: AudioNode | undefined }) {
   const busy = hasPending(pending, "audio/");
   const transitioning = audio.surroundState === "starting" || audio.surroundState === "stopping";
   const on = audio.surroundState === "on";
-  const disabled = busy || transitioning || (!on && (!audio.available || !audio.canEnableSurround));
+  const activationReason = filterTargetReason(audio, output) ?? (!audio.hrtf?.readable ? "Surround requires a readable SOFA file."
+    : !audio.canEnableSurround ? audio.surroundReason ?? "The backend does not allow activation for this target." : null);
+  const disabled = busy || transitioning || (!on && !!activationReason);
   const stateLabels = { off: "Disabled", starting: "Starting...", on: "Active", stopping: "Stopping...", error: "Not active: error" };
-  const reason = transitioning || busy ? "Waiting for confirmed reading from backend." : audio.surroundReason || (!audio.available ? "PipeWire unavailable." : !audio.canEnableSurround && !on ? "The backend does not allow activation for this target." : null);
+  const reason = transitioning || busy ? "Waiting for confirmed reading from backend." : (!on ? activationReason : null) ?? audio.surroundReason;
   return (
     <div className={`surround-control${on ? " surround-on" : ""}`}>
       <div className="surround-heading"><span className="spatial-number" aria-hidden="true">7<span>.1</span></span><span><strong>Binaural Surround</strong><small className={on ? "accent-text" : ""} role="status">{stateLabels[audio.surroundState]}</small></span></div>
       <Toggle label="Surround 7.1" checked={on} disabled={disabled} description={reason || "8-channel input, stereo output with HRTF."}
-        onChange={(enabled) => { void runMutation("audio/surround", () => api.setSurround(enabled)); }} />
+        onChange={(enabled) => {
+          if (disabled) return;
+          if (enabled && output) void runMutation("audio/surround", () => api.setSurround(true, output.nodeName));
+          if (!enabled) void runMutation("audio/surround", () => api.setSurround(false));
+        }} />
     </div>
   );
 }

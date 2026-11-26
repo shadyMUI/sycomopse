@@ -1,5 +1,7 @@
+use super::equalizer::{self, Curves};
 use crate::models::{
-    AppError, AppResult, AudioNode, AudioProfile, AudioSnapshot, ErrorCode, SurroundState,
+    AppError, AppResult, AudioNode, AudioProfile, AudioSnapshot, EqualizerSettings, ErrorCode,
+    SurroundState,
 };
 use crate::profiles::{
     validate_node_name, validate_profile, AppPaths, APP_NODE_PREFIX, SYSTEM_HRTF,
@@ -40,6 +42,12 @@ use super::lifecycle_tests;
 use super::parser::{invalid_dump, JsonArrayParser};
 use super::registry::{is_type, text_property, Registry};
 
+#[cfg(target_os = "linux")]
+#[path = "handoff.rs"]
+mod handoff;
+#[cfg(target_os = "linux")]
+use handoff::Handoff;
+
 pub struct AudioController {
     pub paths: AppPaths,
     pub registry: Registry,
@@ -49,8 +57,11 @@ pub struct AudioController {
     pub state: SurroundState,
     pub reason: Option<String>,
     pub recovery_pending: bool,
+    equalizers: Curves,
     #[cfg(target_os = "linux")]
     pub(crate) filter: Option<ActiveFilter>,
+    #[cfg(target_os = "linux")]
+    handoff: Option<Handoff>,
     #[cfg(all(test, target_os = "linux"))]
     pub(crate) test_backend: Option<lifecycle_tests::Backend>,
 }
@@ -69,7 +80,10 @@ impl AudioController {
     }
 
     pub fn new(paths: AppPaths) -> Self {
+        let settings = equalizer::load(&paths);
+        let settings_error = settings.as_ref().err().map(|e| e.message.clone());
         Self {
+            equalizers: settings.unwrap_or_default(),
             paths,
             registry: Registry::default(),
             available: false,
@@ -77,13 +91,15 @@ impl AudioController {
             hrtf: None,
             state: SurroundState::Off,
             reason: if cfg!(target_os = "linux") {
-                None
+                settings_error
             } else {
                 Some("Il backend audio richiede Linux.".into())
             },
             recovery_pending: true,
             #[cfg(target_os = "linux")]
             filter: None,
+            #[cfg(target_os = "linux")]
+            handoff: None,
             #[cfg(all(test, target_os = "linux"))]
             test_backend: None,
         }
@@ -138,7 +154,29 @@ impl AudioController {
                 self.state,
                 SurroundState::Starting | SurroundState::Stopping
             );
+        #[cfg(target_os = "linux")]
+        let equalizer_output = self
+            .filter
+            .as_ref()
+            .filter(|f| {
+                f.equalizer.enabled
+                    && !self.recovery_pending
+                    && effective.as_deref() == Some(&f.record.virtual_node_name)
+            })
+            .map(|f| f.record.selected_physical_target.clone());
+        #[cfg(not(target_os = "linux"))]
+        let equalizer_output = None;
+        #[cfg(target_os = "linux")]
+        let owned_filter_output = self
+            .filter
+            .as_ref()
+            .map(|f| f.record.selected_physical_target.clone());
+        #[cfg(not(target_os = "linux"))]
+        let owned_filter_output = None;
         AudioSnapshot {
+            equalizers: self.equalizers.clone(),
+            equalizer_output,
+            owned_filter_output,
             available: self.available,
             outputs,
             inputs,
@@ -234,20 +272,47 @@ impl AudioController {
     }
 
     pub async fn set_surround(&mut self, enabled: bool) -> AppResult<()> {
+        let expected = self.selected_output.clone();
+        self.set_surround_for(enabled, expected.as_deref()).await
+    }
+
+    pub async fn set_surround_for(
+        &mut self,
+        enabled: bool,
+        expected: Option<&str>,
+    ) -> AppResult<()> {
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = enabled;
+            let _ = (enabled, expected);
             self.available = false;
             self.state = SurroundState::Error;
             Err(AppError::unsupported_platform())
         }
         #[cfg(target_os = "linux")]
         {
-            let result = if enabled {
-                self.enable_surround(None).await
-            } else {
-                self.stop_filter(RestoreIntent::Bypass).await
-            };
+            let result = async {
+                if enabled {
+                    let name = expected.ok_or_else(Self::target_mismatch)?;
+                    let eq = self.equalizers.get(name).cloned().unwrap_or_default();
+                    self.configure_filter(name, true, &eq, None, true).await
+                } else if let Some(filter) = &self.filter {
+                    let name = filter.record.selected_physical_target.clone();
+                    let eq = filter.equalizer.clone();
+                    if filter.hrtf_reference.is_some() {
+                        self.read_registry().await?;
+                        if eq.enabled && self.route_matches(&name) {
+                            return self.configure_filter(&name, false, &eq, None, true).await;
+                        }
+                        // Off must stop pinned streams too, not reclaim an external route for EQ.
+                        self.stop_filter(RestoreIntent::Bypass).await
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    self.stop_filter(RestoreIntent::Bypass).await
+                }
+            }
+            .await;
             if let Err(error) = &result {
                 if self.filter.is_none() {
                     self.state = SurroundState::Error;
@@ -270,8 +335,12 @@ impl AudioController {
             let result = match surround::import_hrtf(&self.paths, &path).await {
                 Ok(selection) => {
                     // A new selection must not be shown as the HRTF of an old running filter.
-                    let stopped = if self.filter.is_some() {
-                        self.stop_filter(RestoreIntent::Bypass).await
+                    let stopped = if self
+                        .filter
+                        .as_ref()
+                        .is_some_and(|f| f.hrtf_reference.is_some())
+                    {
+                        self.set_surround(false).await
                     } else {
                         Ok(())
                     };
@@ -303,7 +372,7 @@ impl AudioController {
                 self.state = SurroundState::Off;
                 self.reason = None;
             }
-            self.complete(result).await
+            result
         }
     }
 
@@ -403,28 +472,38 @@ impl AudioController {
         node: Option<&AudioNode>,
         expected: Option<&str>,
     ) -> AppResult<()> {
+        let effective = self.registry.defaults().0;
         #[cfg(test)]
         if let Some(backend) = &mut self.test_backend {
-            return backend.write_default(node, expected);
+            return backend.write_default(node, expected, effective.as_deref());
         }
-        crate::audio_worker::set_default(node, &self.control_cookie()?, expected).await
+        crate::audio_worker::set_default(
+            node,
+            &self.control_cookie()?,
+            expected,
+            effective.as_deref(),
+        )
+        .await
     }
 
     pub(crate) async fn spawn_filter(
         &mut self,
+        paths: &AppPaths,
         target: &AudioNode,
-        hrtf: &HrtfSelection,
+        hrtf: Option<&HrtfSelection>,
+        eq: &EqualizerSettings,
         configured: Option<String>,
         effective: Option<String>,
     ) -> AppResult<ActiveFilter> {
         #[cfg(test)]
         if let Some(backend) = &mut self.test_backend {
-            return backend.spawn(&self.paths, target, hrtf, configured, effective);
+            return backend.spawn(paths, target, hrtf, eq, configured, effective);
         }
         ActiveFilter::spawn(
-            &self.paths,
+            paths,
             target,
             hrtf,
+            eq,
             configured,
             effective,
             self.registry.cookie(),
@@ -432,12 +511,12 @@ impl AudioController {
         .await
     }
 
-    pub async fn terminate_current_filter(&mut self) -> AppResult<()> {
+    async fn terminate_filter(&mut self, other: bool) -> AppResult<()> {
         #[cfg(test)]
         if let Some(backend) = &mut self.test_backend {
             backend.before_stop().await?;
         }
-        let Some(filter) = self.filter.as_mut() else {
+        let Some(filter) = self.filter_slot(other).as_mut() else {
             return Ok(());
         };
         #[cfg(test)]
@@ -454,7 +533,7 @@ impl AudioController {
 
     pub async fn read_registry(&mut self) -> AppResult<()> {
         #[cfg(test)]
-        if let Some(backend) = &self.test_backend {
+        if let Some(backend) = &mut self.test_backend {
             let result = backend.read_registry().and_then(|registry| {
                 self.registry
                     .replace(registry.objects.into_values().collect())
@@ -510,16 +589,33 @@ impl AudioController {
         name: &str,
         expected: Option<&Option<String>>,
     ) -> AppResult<()> {
+        self.write_default_observed(name, expected, None, None)
+            .await
+    }
+
+    pub(super) async fn write_default_observed(
+        &mut self,
+        name: &str,
+        expected: Option<&Option<String>>,
+        expected_effective: Option<&Option<String>>,
+        verified_record: Option<&surround::RestoreRecord>,
+    ) -> AppResult<()> {
         let node = self.resolve_current(name, true).await?;
-        let previous = self.registry.defaults().1;
-        if expected.is_some_and(|expected| *expected != previous) {
+        let (effective, previous, _) = self.registry.defaults();
+        if expected.is_some_and(|expected| *expected != previous)
+            || expected_effective.is_some_and(|expected| *expected != effective)
+        {
             return Err(AppError::new(
                 ErrorCode::NotConfirmed,
                 "Scelta esterna del default conservata; transazione annullata.",
             ));
         }
         if name.starts_with(APP_NODE_PREFIX) {
-            let record = surround::read_restore(&self.paths)?.ok_or_else(|| {
+            let record = match verified_record {
+                Some(record) => Some(record.clone()),
+                None => surround::read_restore(&self.paths)?,
+            }
+            .ok_or_else(|| {
                 AppError::new(
                     ErrorCode::NotConfirmed,
                     "Il filtro non dispone di uno stato di ripristino valido.",
@@ -527,6 +623,7 @@ impl AudioController {
             })?;
             if record.virtual_node_name != name
                 || record.app_process_id != std::process::id()
+                || (verified_record.is_none() && effective != record.previous_effective_default)
                 || !verify_graph(&self.registry, &record)?
             {
                 return Err(AppError::new(
@@ -547,9 +644,7 @@ impl AudioController {
                 ));
             }
             let (effective, configured, _) = self.registry.defaults();
-            if configured.as_deref() == Some(name)
-                && (!name.starts_with(APP_NODE_PREFIX) || effective.as_deref() == Some(name))
-            {
+            if configured.as_deref() == Some(name) && effective.as_deref() == Some(name) {
                 return Ok(());
             }
             if (configured != previous && configured.as_deref() != Some(name))
@@ -645,7 +740,7 @@ impl AudioController {
         if name.starts_with(APP_NODE_PREFIX) {
             return Err(AppError::new(
                 ErrorCode::Validation,
-                "Il nodo 7.1 si seleziona soltanto dopo la verifica del filtro.",
+                "L'uscita virtuale si seleziona soltanto dopo la verifica del filtro.",
             ));
         }
         if self.filter.is_some() {
@@ -655,6 +750,20 @@ impl AudioController {
         self.write_default(name, None).await?;
         self.selected_output = (!self.registry.node(name)?.is_virtual).then(|| name.into());
         self.reason = None;
+        if let Some(eq) = self
+            .equalizers
+            .get(name)
+            .filter(|eq| {
+                eq.enabled
+                    && self
+                        .registry
+                        .node(name)
+                        .is_ok_and(|node| stereo_target(&node).is_ok())
+            })
+            .cloned()
+        {
+            self.configure_filter(name, false, &eq, None, true).await?;
+        }
         Ok(())
     }
 
@@ -662,7 +771,9 @@ impl AudioController {
         if !self.recovery_pending {
             return Ok(());
         }
-        if self.filter.is_some() {
+        if self.handoff.is_some() {
+            self.recover_handoff().await
+        } else if self.filter.is_some() {
             self.stop_filter(RestoreIntent::Bypass).await
         } else {
             self.recover_stale().await
@@ -670,44 +781,55 @@ impl AudioController {
     }
 
     pub async fn recover_stale(&mut self) -> AppResult<()> {
-        if self.filter.is_some() {
+        if self.filter.is_some() || self.handoff.is_some() {
             return Err(AppError::new(
                 ErrorCode::Busy,
                 "Terminare prima il DSP posseduto; non e' una sessione stale.",
             ));
         }
-        let record = match surround::read_restore(&self.paths) {
-            Ok(record) => record,
-            Err(error) => {
-                self.state = SurroundState::Error;
-                self.reason = Some(error.message.clone());
-                return Err(error);
+        // An orphan in one slot must not prevent recovery of the routed slot.
+        let mut failure = None;
+        for paths in [self.paths.clone(), surround::handoff_paths(&self.paths)] {
+            match self.recover_journal(&paths).await {
+                Ok(Some(record)) => self.selected_output = Some(record.selected_physical_target),
+                Ok(None) => (),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
             }
-        };
-        if let Some(record) = record {
-            // A recovery record is never permission to signal a process by a persisted PID.
-            self.restore_default(&record, RestoreIntent::Recovery)
-                .await?;
-            if self.registry.node(&record.virtual_node_name).is_ok()
-                || self.registry.node(&record.playback_node_name).is_ok()
-            {
-                self.state = SurroundState::Error;
-                self.reason = Some("Una vecchia sessione surround e' ancora visibile: nessun PID persistito viene terminato e nessun secondo filtro viene creato.".into());
-                return Err(AppError::new(
-                    ErrorCode::Busy,
-                    self.reason.clone().unwrap_or_default(),
-                ));
-            }
-            surround::clear_restore(&self.paths, &record.session_id)?;
-            self.selected_output = Some(record.selected_physical_target.clone());
-            let directory = self.paths.runtime_dir.join(&record.session_id);
-            let _ = std::fs::remove_file(directory.join("spatializer.conf"));
-            let _ = std::fs::remove_dir(directory);
-            self.reason = None;
+        }
+        if let Some(error) = failure {
+            self.state = SurroundState::Error;
+            self.reason = Some(error.message.clone());
+            return Err(error);
         }
         self.recovery_pending = false;
         self.state = SurroundState::Off;
         Ok(())
+    }
+
+    async fn recover_journal(&mut self, paths: &AppPaths) -> AppResult<Option<RestoreRecord>> {
+        let Some(record) = surround::read_restore(paths)? else {
+            return Ok(None);
+        };
+        // A record is never permission to signal a process by a persisted PID.
+        self.restore_default(&record, RestoreIntent::Recovery)
+            .await?;
+        if self.registry.objects.values().any(|object| {
+            is_type(object, ":Node")
+                && text_property(object, "node.name").is_some_and(|name| {
+                    name == record.virtual_node_name || name == record.playback_node_name
+                })
+        }) {
+            return Err(AppError::new(ErrorCode::Busy,
+                "Una vecchia sessione DSP e' ancora visibile; nessun PID persistito viene terminato."));
+        }
+        surround::clear_restore(paths, &record.session_id)?;
+        let directory = paths.runtime_dir.join(&record.session_id);
+        let _ = std::fs::remove_file(directory.join("spatializer.conf"));
+        let _ = std::fs::remove_dir(directory);
+        self.reason = None;
+        Ok(Some(record))
     }
 
     pub(crate) async fn restore_default(
@@ -716,7 +838,7 @@ impl AudioController {
         intent: RestoreIntent,
     ) -> AppResult<()> {
         self.read_registry().await?;
-        let (_, configured, _) = self.registry.defaults();
+        let (observed_effective, configured, _) = self.registry.defaults();
         let outputs = self.registry.nodes(true);
         let target_present = outputs.iter().any(|node| {
             node.node_name == record.selected_physical_target
@@ -772,8 +894,12 @@ impl AudioController {
             }
         };
         // Observe ownership immediately before the write, not from a previous UI snapshot.
-        if self.registry.defaults().1.as_deref() != Some(record.virtual_node_name.as_str()) {
+        let (effective, current, _) = self.registry.defaults();
+        if current != configured {
             return Ok(());
+        }
+        if effective != observed_effective {
+            return Err(Self::target_mismatch());
         }
         self.mutate_default(node.as_ref(), Some(&record.virtual_node_name))
             .await?;
@@ -796,6 +922,10 @@ impl AudioController {
         intent: RestoreIntent,
         replacement: Option<&str>,
     ) -> AppResult<()> {
+        if self.handoff.is_some() {
+            // Shutdown/explicit bypass may arrive after cancellation at any await.
+            self.stop_handoff().await?;
+        }
         self.state = SurroundState::Stopping;
         let Some(record) = self.filter.as_ref().map(|filter| filter.record.clone()) else {
             let result = if self.recovery_pending && self.available {
@@ -817,7 +947,7 @@ impl AudioController {
         self.recovery_pending = true;
         let replacement_baseline = self.registry.defaults().1;
         // Kill the owned DSP before any fallback. It must never follow a fallback to speakers.
-        let stopped = self.terminate_current_filter().await;
+        let stopped = self.terminate_filter(false).await;
         if stopped.is_ok() {
             self.filter.take();
         }
@@ -875,7 +1005,9 @@ impl AudioController {
                 )
                 .detail(filter.process.stderr()),
             )
-        } else if !self.hrtf.as_ref().is_some_and(HrtfSelection::readable) {
+        } else if filter.hrtf_reference.is_some()
+            && !self.hrtf.as_ref().is_some_and(HrtfSelection::readable)
+        {
             Some(AppError::new(
                 ErrorCode::HrtfUnavailable,
                 "Il file SOFA selezionato non e' piu leggibile.",
@@ -904,29 +1036,123 @@ impl AudioController {
         Ok(())
     }
 
-    pub async fn enable_surround(&mut self, level: Option<(f64, bool)>) -> AppResult<()> {
-        let result = self.enable_surround_inner(level).await;
+    fn target_mismatch() -> AppError {
+        AppError::new(ErrorCode::NotConfirmed, "L'uscita mostrata non è quella in uso. Applicare l'uscita fisica prima di attivare gli effetti.")
+    }
+
+    fn route_matches(&self, name: &str) -> bool {
+        if self.selected_output.as_deref() != Some(name) {
+            return false;
+        }
+        let (effective, configured, _) = self.registry.defaults();
+        if let Some(filter) = &self.filter {
+            let virtual_name = Some(filter.record.virtual_node_name.as_str());
+            return filter.record.selected_physical_target == name
+                && effective.as_deref() == virtual_name
+                && configured.as_deref() == virtual_name;
+        }
+        effective.as_deref() == Some(name) && configured.as_deref().is_none_or(|n| n == name)
+    }
+
+    // A saved curve is desired state; it is never authority to mutate a different route.
+    pub async fn set_equalizer(&mut self, name: &str, eq: &EqualizerSettings) -> AppResult<()> {
+        eq.validate()?;
+        self.read_registry().await?;
+        self.recover_pending().await?;
+        stereo_target(&self.registry.node(name)?)?;
+        if !self.route_matches(name) {
+            return Err(Self::target_mismatch());
+        }
+        let pending = equalizer::stage(&self.paths, name, eq)?;
+        let spatial = self
+            .filter
+            .as_ref()
+            .is_some_and(|f| f.hrtf_reference.is_some());
+        let live = eq.enabled && self.filter.as_ref().is_some_and(|f| f.equalizer.enabled);
+        let result = if live {
+            self.update_filter_equalizer(eq).await
+        } else if eq.enabled || spatial {
+            self.configure_filter(name, spatial, eq, None, true).await
+        } else {
+            self.stop_filter(RestoreIntent::Bypass).await
+        };
+        self.complete(result).await?;
+        if live && !self.route_matches(name) {
+            return Err(Self::target_mismatch());
+        }
+        self.equalizers = pending.commit(&self.paths)?;
+        Ok(())
+    }
+
+    async fn update_filter_equalizer(&mut self, eq: &EqualizerSettings) -> AppResult<()> {
+        let filter = self.filter.as_ref().ok_or_else(Self::target_mismatch)?;
+        let name = &filter.record.virtual_node_name;
+        if !verify_graph(&self.registry, &filter.record)? {
+            return Err(AppError::new(
+                ErrorCode::NotConfirmed,
+                "Il filtro EQ attivo non è più verificabile.",
+            ));
+        }
+        let node = self.registry.node(name)?;
+        #[cfg(test)]
+        let simulated = self
+            .test_backend
+            .as_mut()
+            .map(|backend| backend.write_equalizer(&node, eq));
+        #[cfg(not(test))]
+        let simulated: Option<AppResult<()>> = None;
+        match simulated {
+            Some(result) => result?,
+            None => crate::audio_worker::set_equalizer(&node, &self.control_cookie()?, eq).await?,
+        }
+        // The worker confirms current coefficients on the held proxy. Keep runtime
+        // state truthful even if the final route check prevents saving the curve.
+        if let Some(filter) = &mut self.filter {
+            filter.equalizer = eq.clone();
+        }
+        self.reason = None;
+        Ok(())
+    }
+
+    async fn configure_filter(
+        &mut self,
+        name: &str,
+        spatial: bool,
+        eq: &EqualizerSettings,
+        level: Option<(f64, bool)>,
+        require_applied: bool,
+    ) -> AppResult<()> {
+        let result = self
+            .configure_filter_inner(name, spatial, eq, level, require_applied)
+            .await;
         if let Err(error) = &result {
             if self.filter.is_none() {
                 self.state = SurroundState::Error;
-                self.recovery_pending =
-                    surround::read_restore(&self.paths).map_or(true, |record| record.is_some());
+                self.recovery_pending = [&self.paths, &surround::handoff_paths(&self.paths)]
+                    .iter()
+                    .any(|paths| surround::read_restore(paths).map_or(true, |r| r.is_some()));
             }
             self.reason = Some(error.message.clone());
         }
         result
     }
 
-    pub async fn enable_surround_inner(&mut self, level: Option<(f64, bool)>) -> AppResult<()> {
+    async fn configure_filter_inner(
+        &mut self,
+        name: &str,
+        spatial: bool,
+        eq: &EqualizerSettings,
+        level: Option<(f64, bool)>,
+        require_applied: bool,
+    ) -> AppResult<()> {
+        eq.validate()?;
         self.read_registry().await?;
         self.recover_pending().await?;
-        let name = self.selected_output.clone().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::TargetUnavailable,
-                "Selezionare un'uscita fisica.",
-            )
-        })?;
-        let target = self.registry.node(&name)?;
+        if require_applied && !self.route_matches(name) {
+            return Err(Self::target_mismatch());
+        }
+        let (effective, configured, _) = self.registry.defaults();
+        let target = self.registry.node(name)?;
         stereo_target(&target)?;
         if !same_channels(&self.registry.port_channels(target.id, "in"), &["FL", "FR"]) {
             return Err(AppError::new(
@@ -939,104 +1165,156 @@ impl AudioController {
             .as_ref()
             .map(|selection| selection.status.reference.as_str())
             .unwrap_or(SYSTEM_HRTF);
-        let hrtf = self.resolve_hrtf(reference).await?;
-        if let Some(filter) = &self.filter {
-            if filter.record.selected_physical_target == name
-                && filter.hrtf_reference == hrtf.status.reference
-                && self.registry.defaults().0.as_deref()
-                    == Some(filter.record.virtual_node_name.as_str())
-                && self.registry.defaults().1.as_deref()
-                    == Some(filter.record.virtual_node_name.as_str())
-            {
-                self.enforce_safety().await?;
-                if let Some((volume, mute)) = level {
-                    let input = self
-                        .filter
-                        .as_ref()
-                        .unwrap()
-                        .record
-                        .virtual_node_name
-                        .clone();
-                    let result = self.write_level(&input, volume, mute).await;
-                    if result.is_err() {
-                        let _ = self.stop_filter(RestoreIntent::Rollback).await;
-                    }
-                    result?;
-                }
-                self.state = SurroundState::On;
-                self.reason = None;
-                return Ok(());
-            }
-            self.stop_filter(RestoreIntent::Bypass).await?;
-        }
-        self.state = SurroundState::Starting;
+        let hrtf = if spatial {
+            Some(self.resolve_hrtf(reference).await?)
+        } else {
+            None
+        };
+        let requested_hrtf = hrtf.as_ref().map(|s| &s.status.reference);
+        let ready = if spatial {
+            SurroundState::On
+        } else {
+            SurroundState::Off
+        };
         self.read_registry().await?;
-        let (effective, configured, _) = self.registry.defaults();
-        let current_target = self.registry.node(&name)?;
+        let (now_effective, now_configured, _) = self.registry.defaults();
+        if now_effective != effective || now_configured != configured {
+            return Err(Self::target_mismatch());
+        }
+        let current_target = self.registry.node(name)?;
         if current_target.object_serial != target.object_serial {
             return Err(AppError::new(
                 ErrorCode::TargetUnavailable,
                 "Il target e' cambiato durante la preparazione del filtro.",
             ));
         }
-        let target = current_target;
-        stereo_target(&target)?;
-        let filter = self
-            .spawn_filter(&target, &hrtf, configured, effective)
-            .await?;
-        // The controller adopts the child before post-spawn persistence or any await.
-        self.filter = Some(filter);
+        stereo_target(&current_target)?;
+        let mut restore_effective = effective.clone();
+        let mut restore_configured = configured.clone();
+        let staged = self.filter.is_some();
+        let paths = if let Some(filter) = &self.filter {
+            let old = &filter.record;
+            let owned = Some(old.virtual_node_name.as_str());
+            let restore_old = effective.as_deref() == owned;
+            if restore_old != (configured.as_deref() == owned) {
+                return Err(Self::target_mismatch());
+            }
+            if filter.record.selected_physical_target == name
+                && filter.hrtf_reference.as_ref() == requested_hrtf
+                && (!eq.enabled && !filter.equalizer.enabled || filter.equalizer == *eq)
+                && restore_old
+            {
+                let input = old.virtual_node_name.clone();
+                self.enforce_safety().await?;
+                if let Some((volume, mute)) = level {
+                    let result = self.write_level(&input, volume, mute).await;
+                    if result.is_err() {
+                        // The live filter itself may already have a partial level change.
+                        let _ = self.stop_filter(RestoreIntent::Rollback).await;
+                    }
+                    result?;
+                    if !self.route_matches(name) {
+                        return Err(Self::target_mismatch());
+                    }
+                }
+                self.state = ready;
+                self.reason = None;
+                return Ok(());
+            }
+            if restore_old {
+                restore_effective = old.previous_effective_default.clone();
+                restore_configured = old.previous_configured_default.clone();
+            }
+            let paths = surround::prepare_handoff(&self.paths, old)?;
+            self.handoff = Some(Handoff::staging(restore_old));
+            paths
+        } else {
+            self.state = SurroundState::Starting;
+            self.paths.clone()
+        };
         self.recovery_pending = true;
-        let mut record = self.filter.as_ref().unwrap().record.clone();
         let result = async {
+            let filter = self
+                .spawn_filter(
+                    &paths,
+                    &current_target,
+                    hrtf.as_ref(),
+                    eq,
+                    restore_configured,
+                    restore_effective,
+                )
+                .await?;
+            let mut record = filter.record.clone();
+            // Adopt before post-spawn persistence or any await, including on replacement.
+            *self.filter_slot(staged) = Some(filter);
             #[cfg(test)]
             if let Some(backend) = &mut self.test_backend {
-                backend.prepare_post_spawn_store(&self.paths)?;
+                backend.prepare_post_spawn_store(&paths)?;
             }
-            surround::write_restore(&self.paths, &record)?;
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
-            loop {
-                let filter = self.filter.as_mut().unwrap();
-                if filter.process.has_exited()? {
-                    return Err(AppError::new(ErrorCode::HrtfUnavailable, "Il filtro SOFA non si e' avviato: verificare il plugin PipeWire/libmysofa.").detail(filter.process.stderr()));
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(AppError::new(ErrorCode::Timeout, "Nodi, otto porte di ingresso e link stereo del filtro non osservati in tempo.").detail(filter.process.stderr()));
-                }
-                self.read_registry().await?;
-                if verify_graph(&self.registry, &record)? { break; }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            record.virtual_object_serial = self.registry.node(&record.virtual_node_name)?.object_serial;
-            record.playback_object_serial = self.registry.node(&record.playback_node_name)?.object_serial;
-            surround::write_restore(&self.paths, &record)?;
-            self.filter.as_mut().unwrap().record = record.clone();
+            surround::write_restore(&paths, &record)?;
+            self.verify_prepared_filter(staged, &mut record, &effective, &configured)
+                .await?;
+            surround::write_restore(&paths, &record)?;
+            self.filter_slot(staged).as_mut().unwrap().record = record.clone();
+            let inherit = staged && level.is_none();
+            let level = if inherit {
+                Some(self.current_filter_level()?)
+            } else {
+                level
+            };
             if let Some((volume, mute)) = level {
-                self.write_level(&record.virtual_node_name, volume, mute).await?;
+                self.prepare_virtual_level(&record, volume, mute).await?;
             }
-            self.read_registry().await?;
-            if !verify_graph(&self.registry, &record)? { return Err(AppError::new(ErrorCode::NotConfirmed, "Link del filtro persi prima del cambio default.")); }
-            // Do not replace a choice made externally during the start transaction.
-            if self.registry.defaults().1 != record.previous_configured_default {
-                return Err(AppError::new(ErrorCode::NotConfirmed, "Default cambiato da un altro client durante l'attivazione; scelta esterna conservata."));
+            if inherit && Some(self.current_filter_level()?) != level {
+                return Err(AppError::new(
+                    ErrorCode::NotConfirmed,
+                    "Livello del filtro precedente cambiato durante la preparazione.",
+                ));
             }
-            self.write_default(&record.virtual_node_name, Some(&record.previous_configured_default)).await?;
+            self.write_default_observed(
+                &record.virtual_node_name,
+                Some(&configured),
+                Some(&effective),
+                Some(&record),
+            )
+            .await?;
             self.read_registry().await?;
-            if !verify_graph(&self.registry, &record)? { return Err(AppError::new(ErrorCode::NotConfirmed, "Il collegamento fisico non e' confermato dopo il cambio default.")); }
-            if self.registry.defaults().0.as_deref() != Some(record.virtual_node_name.as_str()) {
-                return Err(AppError::new(ErrorCode::NotConfirmed, "Il sink 7.1 non e' il default effettivo."));
+            if !verify_graph(&self.registry, &record)?
+                || !self.is_filter_default(&record)
+                || level.is_some_and(|(volume, mute)| {
+                    !self.prepared_level_matches(&record, volume, mute)
+                })
+            {
+                return Err(AppError::new(
+                    ErrorCode::NotConfirmed,
+                    "Filtro o default non confermato dopo il cambio di uscita.",
+                ));
             }
             Ok(())
-        }.await;
+        }
+        .await;
         if let Err(error) = result {
-            let _ = self.stop_filter(RestoreIntent::Rollback).await;
-            self.state = SurroundState::Error;
-            self.reason = Some(error.message.clone());
+            if staged {
+                self.recover_handoff().await?;
+            } else if self.filter.is_some() {
+                let _ = self.stop_filter(RestoreIntent::Rollback).await;
+                self.state = SurroundState::Error;
+            }
             return Err(error);
         }
-        self.hrtf = Some(hrtf);
-        self.recovery_pending = false;
-        self.state = SurroundState::On;
+        if let Some(hrtf) = hrtf {
+            self.hrtf = Some(hrtf);
+        }
+        self.state = ready;
+        if staged {
+            self.commit_handoff();
+            self.recover_handoff().await?;
+            if !self.is_filter_default(&self.filter.as_ref().unwrap().record) {
+                return Err(Self::target_mismatch());
+            }
+        } else {
+            self.recovery_pending = false;
+        }
         self.reason = None;
         Ok(())
     }
@@ -1052,11 +1330,18 @@ impl AudioController {
                 "Il profilo deve indicare un'uscita fisica disponibile.",
             ));
         }
+        let eq = profile
+            .equalizer
+            .as_ref()
+            .or_else(|| self.equalizers.get(&profile.output_node_name))
+            .cloned()
+            .unwrap_or_default();
+        let processing = profile.surround_requested || eq.enabled;
         let hrtf = match profile.hrtf.as_deref() {
             Some(reference) => Some(self.resolve_hrtf(reference).await?),
             None => None,
         };
-        if profile.surround_requested {
+        if processing {
             stereo_target(&target)?;
             if !same_channels(&self.registry.port_channels(target.id, "in"), &["FL", "FR"]) {
                 return Err(AppError::new(
@@ -1069,13 +1354,24 @@ impl AudioController {
         let previous_selected = self.selected_output.clone();
         let previous_hrtf = self.hrtf.clone();
         let previous_default = self.registry.defaults().1;
+        let pending_curve = profile
+            .equalizer
+            .as_ref()
+            .map(|eq| equalizer::stage(&self.paths, &profile.output_node_name, eq))
+            .transpose()?;
         self.selected_output = Some(profile.output_node_name.clone());
         if let Some(hrtf) = hrtf {
             self.hrtf = Some(hrtf);
         }
-        let result = if profile.surround_requested {
-            self.enable_surround(Some((profile.volume, profile.mute)))
-                .await
+        let result = if processing {
+            self.configure_filter(
+                &profile.output_node_name,
+                profile.surround_requested,
+                &eq,
+                Some((profile.volume, profile.mute)),
+                false,
+            )
+            .await
         } else {
             async {
                 // Prepare the requested physical level before stop/fallback can
@@ -1090,10 +1386,11 @@ impl AudioController {
             }
             .await
         };
+        let result = self.complete(result).await;
         if result.is_err() {
             self.selected_output = previous_selected;
             self.hrtf = previous_hrtf;
-            if !profile.surround_requested
+            if !processing
                 && self.read_registry().await.is_ok()
                 && self.registry.defaults().1.as_deref() == Some(profile.output_node_name.as_str())
             {
@@ -1110,6 +1407,10 @@ impl AudioController {
                 // Do not restore a higher physical volume after a partial application.
             }
         }
-        result
+        result?;
+        if let Some(pending) = pending_curve {
+            self.equalizers = pending.commit(&self.paths)?;
+        }
+        Ok(())
     }
 }

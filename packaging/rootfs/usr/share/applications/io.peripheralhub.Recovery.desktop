@@ -2,7 +2,7 @@
 Type=Application
 Name=Restore mouse mappings
 Name[it]=Ripristina mouse
-Comment=Disable only Peripheral Hub mouse mappings
+Comment=Disable only Sycomopse mouse mappings
 Exec=/usr/bin/peripheral-hub-remapping-agent --disable-all
 TryExec=/usr/bin/peripheral-hub-remapping-agent
 Icon=peripheral-hub

@@ -225,6 +225,9 @@ pub(crate) fn validate_profile(profile: &AudioProfile) -> AppResult<()> {
         ));
     }
     validate_node_name(&profile.output_node_name)?;
+    if let Some(eq) = &profile.equalizer {
+        eq.validate()?;
+    }
     if let Some(reference) = &profile.hrtf {
         validate_hrtf_reference(reference)?;
     } else if profile.surround_requested {
@@ -361,6 +364,7 @@ mod tests {
             volume: 0.4,
             mute: false,
             surround_requested: true,
+            equalizer: None,
         }
     }
 

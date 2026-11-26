@@ -20,7 +20,27 @@ if scenario == "device-route" or scenario == "device-replace" or acp then
   original.properties["card.profile.device"] = "0"
   devices[1] = original_device
 end
-local meta_name = request.expected
+local function quote(value)
+  return '"' .. value:gsub('[%z\1-\31\\"]', function(char)
+    if char == '\\' or char == '"' then return '\\' .. char end
+    return string.format('\\u%04x', string.byte(char))
+  end) .. '"'
+end
+local decoded = { ['{"name":[]}'] = { name = {} } }
+local function default_value(name)
+  if name == nil then return nil end
+  local value = '{"name":' .. quote(name) .. '}'
+  decoded[value] = { name = name }
+  return value
+end
+local configured_key, effective_key = "default.configured.audio.sink", "default.audio.sink"
+local metadata_values = {
+  [configured_key] = default_value(request.expected_configured),
+  [effective_key] = default_value(request.expected_effective),
+}
+if scenario == "malformed-default" then metadata_values[configured_key] = "[]" end
+if scenario == "structured-default" then metadata_values[configured_key] = '{"name":[]}' end
+local turn, metadata_reads = 0, {}
 local meta = { features = 1, ["bound-id"] = 10 }
 local metadata_objects = { meta }
 local volume, muted, channel = 0.8, false, 0.8
@@ -97,7 +117,10 @@ Core = {
         if scenario == "device-replace" then
           replace_device()
         end
-        if scenario == "baseline-change" then meta_name = "external-choice" end
+        if scenario == "baseline-change" then metadata_values[configured_key] = default_value("external-choice") end
+        if scenario == "effective-change" then metadata_values[effective_key] = default_value("external-choice") end
+        if scenario == "effective-removed" then metadata_values[effective_key] = nil end
+        if scenario == "malformed-effective" then metadata_values[effective_key] = '{"name":' end
         if scenario == "metadata-replace" then meta.features = 0; metadata_objects = {} end
       elseif current == 2 and scenario == "replace-after-write" then replace_node() end
       if scenario == "acp-node-swap-sync" and calls == 1 then replace_node() end
@@ -135,12 +158,6 @@ ObjectManager = function(interests)
   }
 end
 
-local function quote(value)
-  return '"' .. value:gsub('[%z\1-\31\\"]', function(char)
-    if char == '\\' or char == '"' then return '\\' .. char end
-    return string.format('\\u%04x', string.byte(char))
-  end) .. '"'
-end
 local function encode(value)
   if type(value) == "string" then return quote(value) end
   if type(value) == "number" or type(value) == "boolean" then return tostring(value) end
@@ -151,25 +168,28 @@ end
 Json = {
   Object = function(fields) return { fields = fields, to_string = function(self) return encode(self) end } end,
   Raw = function(value)
-    return { is_object = function() return scenario ~= "malformed-default" end,
+    return { is_object = function() return value:sub(1, 1) == "{" end,
       parse = function(_, depth)
         assert(depth == 2)
-        return { name = scenario == "structured-default" and { "invalid-name" } or meta_name }
+        return assert(decoded[value], "malformed fixture JSON")
       end }
   end,
 }
-meta.find = function(_, subject, key)
-  assert(subject == 0 and key == "default.configured.audio.sink")
-  if meta_name == nil then return nil, nil end
-  return '{"name":' .. quote(meta_name) .. '}', "Spa:String:JSON"
+meta.find = function(self, subject, key)
+  assert(self == meta and subject == 0 and (key == configured_key or key == effective_key))
+  metadata_reads[key] = turn
+  local value = metadata_values[key]
+  return value, value and "Spa:String:JSON" or nil
 end
 meta.set = function(self, subject, key, value_type, value)
-  assert(self == meta and subject == 0 and key == "default.configured.audio.sink")
+  assert(self == meta and subject == 0 and key == configured_key)
   assert(meta.features == 1)
-  assert(value == request.name_json)
+  assert(metadata_reads[configured_key] == turn and metadata_reads[effective_key] == turn,
+    "both default baselines must be read on the write turn")
+  assert(value == default_value(request.node and request.node.name))
   assert(value_type == (request.node and "Spa:String:JSON" or nil))
   writes = writes + 1
-  meta_name = request.node and request.node.name or nil
+  metadata_values[key] = value
 end
 test_mixer = {
   call = function(_, action, id, parameters)
@@ -244,7 +264,7 @@ function worker_test_finish()
       return left.due == right.due and left.sequence < right.sequence or left.due < right.due
     end)
     local event = table.remove(queue, 1)
-    clock = event.due
+    clock, turn = event.due, event.sequence
     event.callback()
     iterations = iterations + 1
     assert(iterations < 1000)
@@ -283,8 +303,8 @@ function worker_test_finish()
     assert(calls == 0 and writes == 0, "stale proxy must not mutate a recycled instance")
   end
   if scenario == "replace-after-write" then assert(calls == 1 and replacement.features == 1) end
-  if scenario == "baseline-change" or scenario == "malformed-default" or scenario == "structured-default" or scenario == "duplicate-node" or scenario == "metadata-replace" then
-    assert(writes == 0, "external/invalid default must be preserved")
+  if request.operation == "setDefault" then
+    if scenario == "default" or scenario == "clear" then assert(writes == 1)
+    else assert(writes == 0, "external/invalid default must be preserved") end
   end
-  if scenario == "default" or scenario == "clear" then assert(writes == 1) end
 end

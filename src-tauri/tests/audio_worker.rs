@@ -282,6 +282,8 @@ async fn isolated_pipewire_proxy_recycling_cubic_default_and_sofa() {
         metadata(&initial, "default.configured.audio.sink").as_deref(),
         Some("worker.baseline")
     );
+    // This isolated server has no policy manager to choose an effective sink.
+    assert_eq!(metadata(&initial, "default.audio.sink"), None);
 
     audio_worker::set_level(&selected, &cookie, 0.25, true)
         .await
@@ -338,7 +340,7 @@ async fn isolated_pipewire_proxy_recycling_cubic_default_and_sofa() {
         .await
         .unwrap();
 
-    audio_worker::set_default(Some(&selected), &cookie, Some("worker.baseline"))
+    audio_worker::set_default(Some(&selected), &cookie, Some("worker.baseline"), None)
         .await
         .unwrap();
     let dump = server.dump().await;
@@ -347,22 +349,28 @@ async fn isolated_pipewire_proxy_recycling_cubic_default_and_sofa() {
         Some(SELECTED)
     );
     let other = node(&dump, "worker.other");
-    assert_eq!(
-        audio_worker::set_default(Some(&other), &cookie, Some("worker.baseline"))
-            .await
-            .unwrap_err()
-            .code,
-        ErrorCode::NotConfirmed
-    );
+    for (configured, effective) in [
+        (Some("worker.baseline"), None),
+        (Some(SELECTED), Some("worker.other")),
+    ] {
+        assert_eq!(
+            audio_worker::set_default(Some(&other), &cookie, configured, effective)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::NotConfirmed
+        );
+    }
     assert_eq!(
         metadata(&server.dump().await, "default.configured.audio.sink").as_deref(),
         Some(SELECTED)
     );
-    audio_worker::set_default(None, &cookie, Some(SELECTED))
+    audio_worker::set_default(None, &cookie, Some(SELECTED), None)
         .await
         .unwrap();
     let dump = server.dump().await;
     assert_eq!(metadata(&dump, "default.configured.audio.sink"), None);
+    assert_eq!(metadata(&dump, "default.audio.sink"), None);
     assert_eq!(
         metadata(&dump, "default.configured.audio.source").as_deref(),
         Some("source-kept")
@@ -381,7 +389,7 @@ async fn isolated_pipewire_proxy_recycling_cubic_default_and_sofa() {
     assert!(audio_worker::set_level(&stale, &cookie, 0.1, true)
         .await
         .is_err());
-    assert!(audio_worker::set_default(Some(&stale), &cookie, None)
+    assert!(audio_worker::set_default(Some(&stale), &cookie, None, None)
         .await
         .is_err());
     let dump = server.dump().await;

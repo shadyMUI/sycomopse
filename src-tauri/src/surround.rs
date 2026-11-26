@@ -1,6 +1,6 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use crate::models::{AppError, AppResult, ErrorCode, HrtfStatus};
+use crate::models::{AppError, AppResult, EqualizerSettings, ErrorCode, HrtfStatus};
 use crate::profiles::{
     atomic_write, private_dir, read_limited, validate_hrtf_reference, validate_node_name,
     write_new_private, AppPaths, APP_NODE_PREFIX, SYSTEM_HRTF,
@@ -278,9 +278,32 @@ pub(crate) fn render_config(
     Ok(config)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Render the isolated client used for headphone playback. Without an HRTF the
+/// graph is strictly stereo and does not instantiate any SOFA nodes.
+pub fn render_playback_config(
+    target: &str,
+    hrtf_path: Option<&Path>,
+    input: &str,
+    playback: &str,
+    session: &str,
+    eq: &EqualizerSettings,
+) -> AppResult<String> {
+    let base = render_config(
+        target,
+        hrtf_path.unwrap_or(Path::new("")),
+        input,
+        playback,
+        session,
+    )?;
+    crate::audio::equalizer::render(base, hrtf_path.is_some(), eq)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RestoreRecord {
+    // Older journals describe the original eight-channel filter.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stereo_eq: bool,
     pub schema_version: u32,
     pub session_id: String,
     pub previous_configured_default: Option<String>,
@@ -364,6 +387,55 @@ pub(crate) fn clear_restore(paths: &AppPaths, session: &str) -> AppResult<()> {
         #[cfg(unix)]
         fs::File::open(&paths.state_dir)?.sync_all()?;
     }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn handoff_paths(paths: &AppPaths) -> AppPaths {
+    AppPaths {
+        state_dir: paths.state_dir.join("audio-handoff"),
+        ..paths.clone()
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn prepare_handoff(paths: &AppPaths, current: &RestoreRecord) -> AppResult<AppPaths> {
+    let staged = handoff_paths(paths);
+    private_dir(&staged.state_dir)?;
+    if read_restore(paths)?.as_ref() != Some(current) || read_restore(&staged)?.is_some() {
+        return Err(invalid_restore());
+    }
+    // The staged journal and its directory entry must survive independently of the old one.
+    fs::File::open(&paths.state_dir)?.sync_all()?;
+    Ok(staged)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn promote_handoff(
+    paths: &AppPaths,
+    retired: &RestoreRecord,
+    current: &RestoreRecord,
+) -> AppResult<()> {
+    let staged = handoff_paths(paths);
+    if [paths, &staged].into_iter().any(|slot| {
+        fs::symlink_metadata(slot.state_dir.join(RESTORE_FILE))
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    }) {
+        return Err(invalid_restore());
+    }
+    match (read_restore(paths)?, read_restore(&staged)?) {
+        (Some(old), Some(next)) if old == *retired && next == *current => {
+            fs::rename(
+                staged.state_dir.join(RESTORE_FILE),
+                paths.state_dir.join(RESTORE_FILE),
+            )?;
+        }
+        // A previous rename may have succeeded before a directory sync failed.
+        (Some(installed), None) if installed == *current => (),
+        _ => return Err(invalid_restore()),
+    }
+    fs::File::open(&paths.state_dir)?.sync_all()?;
+    fs::File::open(&staged.state_dir)?.sync_all()?;
     Ok(())
 }
 
@@ -545,14 +617,16 @@ pub(crate) mod runtime {
         pub process: OwnedChild,
         pub record: RestoreRecord,
         pub directory: PathBuf,
-        pub hrtf_reference: String,
+        pub hrtf_reference: Option<String>,
+        pub equalizer: EqualizerSettings,
     }
 
     impl ActiveFilter {
         pub async fn spawn(
             paths: &AppPaths,
             target: &AudioNode,
-            hrtf: &HrtfSelection,
+            hrtf: Option<&HrtfSelection>,
+            eq: &EqualizerSettings,
             previous_configured_default: Option<String>,
             previous_effective_default: Option<String>,
             core_cookie: Option<u64>,
@@ -565,6 +639,7 @@ pub(crate) mod runtime {
             })?;
             let session_id = Uuid::new_v4().to_string();
             let mut record = RestoreRecord {
+                stereo_eq: hrtf.is_none(),
                 schema_version: 1,
                 virtual_node_name: format!("{APP_NODE_PREFIX}input.{session_id}"),
                 playback_node_name: format!("{APP_NODE_PREFIX}playback.{session_id}"),
@@ -584,12 +659,13 @@ pub(crate) mod runtime {
             private_dir(&directory)?;
             let config_path = directory.join("spatializer.conf");
             let result = (|| {
-                let config = render_config(
+                let config = render_playback_config(
                     &target.node_name,
-                    &hrtf.path,
+                    hrtf.map(|s| s.path.as_path()),
                     &record.virtual_node_name,
                     &record.playback_node_name,
                     &record.session_id,
+                    eq,
                 )?;
                 write_new_private(&config_path, config.as_bytes())?;
                 write_restore(paths, &record)?;
@@ -627,7 +703,8 @@ pub(crate) mod runtime {
                     process,
                     record: record.clone(),
                     directory: directory.clone(),
-                    hrtf_reference: hrtf.status.reference.clone(),
+                    hrtf_reference: hrtf.map(|s| s.status.reference.clone()),
+                    equalizer: eq.clone(),
                 })
             })();
             if result.is_err() {
@@ -718,6 +795,7 @@ mod tests {
     fn record() -> RestoreRecord {
         let id = "4ccf058b-1487-4cda-9b5a-11a6033a5ad0";
         RestoreRecord {
+            stereo_eq: false,
             schema_version: 1,
             session_id: id.into(),
             previous_configured_default: Some("old.headset".into()),

@@ -246,19 +246,19 @@ pub fn associate_audio(discovery: &mut Discovery, audio_nodes: &[AudioNode], usb
             .and_then(|path| verified_usb_path(path, usb))
         {
             let physical = &usb[index].identity;
-            if !identity
+            if identity
                 .vendor_id
                 .zip(physical.vendor_id)
-                .is_some_and(|(a, b)| a != b)
-                && !identity
+                .is_none_or(|(a, b)| a == b)
+                && identity
                     .product_id
                     .zip(physical.product_id)
-                    .is_some_and(|(a, b)| a != b)
-                && !identity
+                    .is_none_or(|(a, b)| a == b)
+                && identity
                     .serial
                     .as_deref()
                     .zip(physical.serial.as_deref())
-                    .is_some_and(|(a, b)| a != b)
+                    .is_none_or(|(a, b)| a == b)
             {
                 identity.physical_path = physical.physical_path.clone();
                 if identity.serial.is_none() {

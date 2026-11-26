@@ -424,6 +424,39 @@ pub struct AudioSnapshot {
     pub can_enable_surround: bool,
     pub surround_reason: Option<String>,
     pub hrtf: Option<HrtfStatus>,
+    #[serde(default)]
+    pub equalizers: std::collections::BTreeMap<String, EqualizerSettings>,
+    pub equalizer_output: Option<String>,
+    pub owned_filter_output: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EqualizerBand {
+    pub gain_db: f64,
+    pub q: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EqualizerSettings {
+    pub enabled: bool,
+    pub bands: [EqualizerBand; 10],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preamp_db: Option<f64>,
+}
+
+impl Default for EqualizerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            preamp_db: None,
+            bands: [EqualizerBand {
+                gain_db: 0.0,
+                q: 1.4,
+            }; 10],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -437,6 +470,8 @@ pub struct AudioProfile {
     pub volume: f64,
     pub mute: bool,
     pub surround_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equalizer: Option<EqualizerSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

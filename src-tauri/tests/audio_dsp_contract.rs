@@ -4,7 +4,7 @@
 // Fixture device.api=alsa is admission metadata only, on a real software NULL factory.
 
 use peripheral_hub_lib::audio::AudioController;
-use peripheral_hub_lib::models::{AudioProfile, AudioSnapshot, SurroundState};
+use peripheral_hub_lib::models::{AudioProfile, AudioSnapshot, EqualizerSettings, SurroundState};
 use peripheral_hub_lib::profiles::AppPaths;
 use serde::Deserialize;
 use serde_json::Value;
@@ -311,9 +311,11 @@ fn assert_level(snapshot: &AudioSnapshot, dump: &Value, name: &str, volume: f64,
     assert_eq!(props["mute"].as_bool(), Some(muted));
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Journal {
+    #[serde(default)]
+    stereo_eq: bool,
     schema_version: u32,
     session_id: String,
     previous_configured_default: Option<String>,
@@ -547,6 +549,7 @@ fn profile(output: &str, surround: bool, volume: f64, mute: bool) -> AudioProfil
         volume,
         mute,
         surround_requested: surround,
+        equalizer: None,
     }
 }
 
@@ -558,14 +561,19 @@ impl Drop for Capture {
     }
 }
 
-async fn pcm_probe(server: &StagedServer, record: &Journal) {
-    let raw = server.runtime.join("eight-channel.f32");
+async fn pcm_probe(
+    server: &StagedServer,
+    record: &Journal,
+    layout: &[&str],
+    frequency: f32,
+) -> f64 {
+    let raw = server.runtime.join("test-tone.f32");
     let capture = server.runtime.join("stereo-monitor.f32");
     let mut samples = Vec::with_capacity(48000 * 3 * 8 * 4);
     for frame in 0..48000 * 3 {
-        for channel in 0..8 {
+        for channel in 0..layout.len() {
             let phase =
-                frame as f32 * (220.0 + channel as f32 * 37.0) * std::f32::consts::TAU / 48000.0;
+                frame as f32 * frequency * std::f32::consts::TAU / 48000.0 + channel as f32 * 0.1;
             samples.extend_from_slice(&(0.1 * phase.sin()).to_le_bytes());
         }
     }
@@ -588,9 +596,9 @@ async fn pcm_probe(server: &StagedServer, record: &Journal) {
             "--properties",
             "{ stream.capture.sink = true node.name = dsp-contract.monitor }",
         ])
-        .arg(&capture)
+        .arg("-")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(std::fs::File::create(&capture).unwrap())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
     let mut monitor = Capture(
@@ -613,16 +621,16 @@ async fn pcm_probe(server: &StagedServer, record: &Journal) {
             "--rate",
             "48000",
             "--channels",
-            "8",
+            &layout.len().to_string(),
             "--channel-map",
-            "FL,FR,FC,LFE,RL,RR,SL,SR",
+            &layout.join(","),
             "--target",
             &record.virtual_node_name,
             "--properties",
             "{ node.name = dsp-contract.stream stream.dont-remix = true }",
         ])
-        .arg(&raw)
-        .stdin(Stdio::null())
+        .arg("-")
+        .stdin(std::fs::File::open(&raw).unwrap())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
@@ -647,8 +655,8 @@ async fn pcm_probe(server: &StagedServer, record: &Journal) {
                             && number(&object["info"]["output-node-id"]) == stream_id
                     })
                     .collect();
-                if stream_ports.len() == 8 && links.len() == 8 {
-                    assert_channels(stream_ports, &CHANNELS);
+                if stream_ports.len() == layout.len() && links.len() == layout.len() {
+                    assert_channels(stream_ports, layout);
                     let sink_id = number(&node(&dump, &record.virtual_node_name)["id"]);
                     for link in links {
                         assert_eq!(number(&link["info"]["input-node-id"]), sink_id);
@@ -700,9 +708,27 @@ async fn pcm_probe(server: &StagedServer, record: &Journal) {
         "DSP monitor must contain nonzero audio in BOTH channels: {peaks:?}"
     );
     println!(
-        "PCM PROOF: genuine 8-channel stream -> stereo null-sink monitor bytes={} peaks={peaks:?}",
+        "PCM PROOF: {layout:?} -> stereo null-sink monitor bytes={} peaks={peaks:?}",
         bytes.len()
     );
+    // Median non-silent 100 ms RMS: ignore startup/teardown and one-off transport transients.
+    let mut blocks: Vec<f64> = bytes
+        .chunks_exact(4800 * 2 * 4)
+        .map(|block| {
+            (block
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f64::from(f32::from_le_bytes(*b)).powi(2))
+                .sum::<f64>()
+                / 9600.0)
+                .sqrt()
+        })
+        .filter(|v| *v > 1e-7)
+        .collect();
+    assert!(blocks.len() >= 5);
+    blocks.sort_by(f64::total_cmp);
+    blocks[blocks.len() / 2]
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -736,7 +762,7 @@ async fn real_controller_spatializer_71_stereo_contract() {
         controller.set_mute(&first.virtual_node_name, true).await.expect("Public DSP mute");
         assert_level(&controller.snapshot(), &server.dump().await, &first.virtual_node_name, 0.35, true);
         controller.set_mute(&first.virtual_node_name, false).await.unwrap();
-        pcm_probe(&server, &first).await;
+        pcm_probe(&server, &first, &CHANNELS, 1000.0).await;
         controller.apply_profile(&profile(TARGET, true, 0.25, true)).await.expect("Public surround profile");
         let reused = journal(&paths);
         assert_eq!(reused.session_id, first.session_id, "Verified active default should reuse the owned DSP");
@@ -778,6 +804,46 @@ async fn real_controller_spatializer_71_stereo_contract() {
         assert_eq!(recovered.snapshot().surround_state, SurroundState::Off);
         assert_default(&recovered.snapshot(), &server.dump().await, TARGET);
         assert!(!paths.state_dir.join("audio-restore.json").exists());
+        // Compare actual PCM through the production graph, not a Javascript/mock filter.
+        for spatial in [false, true] {
+            if spatial { recovered.set_surround_for(true, Some(TARGET)).await.unwrap(); }
+            let layout: &[&str] = if spatial { &CHANNELS } else { &["FL", "FR"] };
+            let mut eq = EqualizerSettings { enabled: true, ..Default::default() };
+            recovered.set_equalizer(TARGET, &eq).await.unwrap();
+            let record = journal(&paths);
+            assert_eq!(record.stereo_eq, !spatial);
+            let identities = |dump: &Value| {
+                [&record.virtual_node_name, &record.playback_node_name].map(|name| {
+                    let object = node(dump, name);
+                    (number(&object["id"]), number(&object["info"]["props"]["object.serial"]))
+                })
+            };
+            let original = identities(&server.dump().await);
+            let (band, frequency, edits) = if spatial {
+                (5, 1000.0, &[(-6.0, None)][..])
+            } else {
+                // Manual unity preamp lets the +6 dB band boost a low-level stereo tone.
+                (2, 125.0, &[(-6.0, None), (6.0, Some(0.0))][..])
+            };
+            let flat = pcm_probe(&server, &record, layout, frequency).await;
+            for &(gain_db, preamp_db) in edits {
+                eq.bands[band].gain_db = gain_db;
+                eq.preamp_db = preamp_db;
+                recovered.set_equalizer(TARGET, &eq).await.unwrap();
+                assert_eq!(journal(&paths), record);
+                let dump = server.dump().await;
+                assert_eq!(identities(&dump), original);
+                assert_default(&recovered.snapshot(), &dump, &record.virtual_node_name);
+                let edited = pcm_probe(&server, &record, layout, frequency).await;
+                let measured = 20.0 * (edited / flat).log10();
+                assert!((measured - gain_db).abs() < 0.5,
+                    "{layout:?}: expected {gain_db:+} dB, measured {measured:.2} dB");
+            }
+            eq.enabled = false;
+            recovered.set_equalizer(TARGET, &eq).await.unwrap();
+            if spatial { recovered.set_surround(false).await.unwrap(); }
+            assert_default(&recovered.snapshot(), &server.dump().await, TARGET);
+        }
         println!("CONTROLLER PROOF: init=refresh default=confirmed surround=On profile/reuse=confirmed volume/mute=cubic stop/profile/drop-recovery/shutdown=confirmed ownedPids=reaped; synthetic software ONLY");
-    }).await.expect("Public controller DSP contract exceeded its finite 120s budget");
+    }).await.expect("Public controller DSP contract exceeded its finite timeout");
 }

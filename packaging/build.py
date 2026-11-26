@@ -56,7 +56,7 @@ def native_requirements(target):
 def package_deb(rootfs, reports, dependencies, work, destination, version):
     debian = Path(work) / "debian"
     debian.mkdir()
-    (debian / "control").write_text(f"Source: {APP}\nSection: utils\nPriority: optional\nMaintainer: Peripheral Hub contributors <shadyMUI@users.noreply.github.com>\n\nPackage: {APP}\nArchitecture: amd64\nDescription: Peripheral Hub and private remapping engine\n", encoding="utf-8")
+    (debian / "control").write_text(f"Source: {APP}\nSection: utils\nPriority: optional\nMaintainer: Peripheral Hub contributors <shadyMUI@users.noreply.github.com>\n\nPackage: {APP}\nArchitecture: amd64\nDescription: Sycomopse and private remapping engine\n", encoding="utf-8")
     # Only the unique private core is self-provided. Do not ignore unknown
     # system libraries: mysofa/sndfile dependencies must come from real ELFs.
     (debian / "shlibs.local").write_text(f"{PRIVATE_LIB.split('.so.')[0]} 0 {APP}\n", encoding="ascii")
@@ -74,7 +74,7 @@ def package_deb(rootfs, reports, dependencies, work, destination, version):
         f"Package: {APP}\nVersion: {version}-1\nArchitecture: amd64\nSection: utils\nPriority: optional\n"
         f"Maintainer: Peripheral Hub contributors <shadyMUI@users.noreply.github.com>\nInstalled-Size: {size}\n"
         f"Depends: {', '.join(depends)}\nRecommends: pipewire-pulse\nHomepage: https://github.com/shadyMUI/sycomopse\n"
-        "Description: Peripheral Hub GUI, user agent and private Input Remapper engine\n"
+        "Description: Sycomopse GUI, user agent and private Input Remapper engine\n"
         " Native hooks activate the private backend; the desktop session starts the user agent.\n"
         " Separate GPL engine sources and licenses are included.\n", encoding="utf-8",
     )

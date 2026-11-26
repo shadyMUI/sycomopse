@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDemoApi, createHubApi, createTauriApi, isDpiValueAllowed, parseDpiDraft } from "../api";
+import { automaticPreamp, equalizerPresets } from "../audio";
 import { remappingProblem } from "../remapping";
-import type { AudioProfile, MouseBinding, Snapshot } from "../types";
+import type { AudioProfile, EqualizerSettings, MouseBinding, Snapshot } from "../types";
 
 const ipc = vi.hoisted(() => ({ invoke: vi.fn(), isTauri: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: ipc.invoke, isTauri: ipc.isTauri }));
@@ -23,6 +24,7 @@ describe("contratti IPC Tauri", () => {
     ipc.invoke.mockResolvedValue(snapshot);
     const api = createTauriApi();
     const profile = snapshot.profiles[0];
+    const settings = { enabled: true, bands: equalizerPresets[1].bands, preampDb: 0 };
     await api.getSnapshot();
     await api.refreshDevices();
     await api.setDpi("mouse-1", 800, 1600);
@@ -33,7 +35,9 @@ describe("contratti IPC Tauri", () => {
     await api.setDefaultOutput("alsa_output.test");
     await api.setVolume("alsa_input.test", 0.42);
     await api.setMute("alsa_input.test", true);
-    await api.setSurround(true);
+    await api.setSurround(true, "alsa_output.test");
+    await api.setSurround(false);
+    await api.setEqualizer("alsa_output.test", settings);
     await api.importHrtf();
     await api.saveAudioProfile(profile);
     await api.applyAudioProfile(profile.id);
@@ -45,7 +49,8 @@ describe("contratti IPC Tauri", () => {
       ["apply_mouse_remapping", { deviceId: "mouse-1", bindings, autoApply: true, allowWeakIdentity: false }],
       ["disable_mouse_remapping", { deviceId: "mouse-1" }], ["set_default_output", { nodeName: "alsa_output.test" }],
       ["set_volume", { nodeName: "alsa_input.test", volume: 0.42 }], ["set_mute", { nodeName: "alsa_input.test", muted: true }],
-      ["set_surround", { enabled: true }], ["import_hrtf"], ["save_audio_profile", { profile }],
+      ["set_surround", { enabled: true, expectedOutput: "alsa_output.test" }], ["set_surround", { enabled: false }],
+      ["set_equalizer", { nodeName: "alsa_output.test", settings }], ["import_hrtf"], ["save_audio_profile", { profile }],
       ["apply_audio_profile", { profileId: profile.id }], ["exit_app"],
     ]);
   });
@@ -67,11 +72,12 @@ describe("contratti IPC Tauri", () => {
     ipc.isTauri.mockReturnValue(false);
     const api = createTauriApi();
     const snapshot = await api.getSnapshot();
-    expect(snapshot).toMatchObject({ platform: "unsupportedPlatform", demo: false, devices: [], audio: { available: false } });
+    expect(snapshot).toMatchObject({ platform: "unsupportedPlatform", demo: false, devices: [], audio: { available: false, equalizers: {}, equalizerOutput: null, ownedFilterOutput: null } });
     expect(snapshot.diagnostics[0].message).toMatch(/Tauri backend|backend Tauri/);
     await expect(api.setDpi("mouse", 800, 800)).rejects.toMatchObject({ code: "unsupportedPlatform" });
     await expect(api.applyMouseRemapping("mouse", [], false, false)).rejects.toMatchObject({ code: "unsupportedPlatform" });
     await expect(api.disableMouseRemapping("mouse")).rejects.toMatchObject({ code: "unsupportedPlatform" });
+    await expect(api.setEqualizer("output", { enabled: true, bands: equalizerPresets[0].bands })).rejects.toMatchObject({ code: "unsupportedPlatform" });
     await api.subscribe(() => {});
     expect(ipc.invoke).not.toHaveBeenCalled();
     expect(ipc.listen).not.toHaveBeenCalled();
@@ -218,6 +224,10 @@ describe("adapter demo esplicito", () => {
       [{ buttonId: "button-275", action: { kind: "key", code: 9999 } }],
       [{ buttonId: "button-275", action: { kind: "key", code: 272 } }],
       [{ buttonId: "button-275", action: { kind: "mouseButton", code: 30 } }],
+      [{ buttonId: "button-275", action: { kind: "autoclicker", cps: 0, button: 272 } }],
+      [{ buttonId: "button-275", action: { kind: "autoclicker", cps: 101, button: 272 } }],
+      [{ buttonId: "button-275", action: { kind: "autoclicker", cps: 2.5, button: 272 } }],
+      [{ buttonId: "button-272", action: { kind: "autoclicker", cps: 100, button: 272 } }],
       [{ buttonId: "button-275", action: { kind: "chord", modifiers: [], key: 30 } }],
       [{ buttonId: "button-275", action: { kind: "chord", modifiers: [30], key: 31 } }],
       [{ buttonId: "button-275", action: { kind: "chord", modifiers: [29, 29], key: 30 } }],
@@ -261,7 +271,7 @@ describe("adapter demo esplicito", () => {
 
   it("importare una HRTF disattiva il filtro e non riattiva effetti o cambia il volume fisico", async () => {
     const api = createDemoApi();
-    const on = await api.setSurround(true);
+    const on = await api.setSurround(true, (await api.getSnapshot()).audio.selectedOutput!);
     const target = on.audio.outputs.find((node) => node.nodeName === on.audio.selectedOutput)!;
     const imported = await api.importHrtf();
     expect(imported.audio.surroundState).toBe("off");
@@ -271,5 +281,111 @@ describe("adapter demo esplicito", () => {
     expect(imported.audio.hrtf?.reference).toMatch(/^[0-9a-f-]{36}\.sofa$/);
     const previousProfile = await api.applyAudioProfile(imported.profiles[0].id);
     expect(previousProfile.audio.hrtf?.reference).toBe("system");
+  });
+});
+
+describe("headphone EQ contract", () => {
+  it("uses all positive gains for headroom, even when other bands cut more than the boosts", () => {
+    const bands = equalizerPresets[0].bands.map((band) => ({ ...band, gainDb: 12 }));
+    expect(automaticPreamp(bands)).toBe(-120);
+    expect(automaticPreamp(bands.map((band, i) => ({ ...band, gainDb: i < 2 ? 0.3 : -12 })))).toBeCloseTo(-0.6);
+    expect(automaticPreamp(equalizerPresets[0].bands)).toBe(0);
+  });
+
+  it.each([true, false])("enabling surround uses the output's saved enabled=%s EQ rather than its inactive readback", async (enabled) => {
+    const { audio } = await createDemoApi().getSnapshot();
+    const target = audio.selectedOutput!;
+    audio.equalizers[target] = { enabled, bands: equalizerPresets[2].bands };
+    expect(audio.equalizerOutput).toBeNull();
+    const api = createDemoApi(3, audio);
+    const on = await api.setSurround(true, target);
+    expect(on.audio).toMatchObject({ surroundState: "on", ownedFilterOutput: target, equalizerOutput: enabled ? target : null, equalizers: audio.equalizers });
+    const off = await api.setSurround(false);
+    expect(off.audio).toMatchObject({ surroundState: "off", ownedFilterOutput: enabled ? target : null, equalizerOutput: enabled ? target : null });
+  });
+
+  it.each(["effective", "configured", "both"])("releases the surround sink without reclaiming an external %s default", async (moved) => {
+    const base = createDemoApi();
+    const target = (await base.getSnapshot()).audio.selectedOutput!;
+    const saved = { enabled: true, bands: equalizerPresets[1].bands };
+    await base.setEqualizer(target, saved);
+    const { audio } = await base.setSurround(true, target);
+    const external = audio.outputs.find((node) => !node.isVirtual && node.nodeName !== target)!.nodeName;
+    const virtual = audio.defaultOutput;
+    if (moved !== "configured") {
+      audio.defaultOutput = external;
+      audio.equalizerOutput = null;
+    }
+    if (moved !== "effective") audio.configuredDefaultOutput = external;
+    const api = createDemoApi(3, audio);
+    const off = await api.setSurround(false);
+    expect(off.audio).toMatchObject({
+      defaultOutput: external, configuredDefaultOutput: moved === "effective" ? null : external,
+      surroundState: "off", ownedFilterOutput: null, equalizerOutput: null, equalizers: { [target]: saved },
+    });
+    expect(off.audio.outputs.some((node) => node.nodeName === virtual)).toBe(false);
+  });
+
+  it("rejects invalid settings, inputs and stale targets without publishing or rerouting", async () => {
+    vi.stubEnv("VITE_DEMO", "true");
+    const api = createHubApi();
+    const initial = await api.getSnapshot();
+    const target = initial.audio.selectedOutput!;
+    const other = initial.audio.outputs.find((node) => node.nodeName !== target)!.nodeName;
+    const settings = { enabled: true, bands: equalizerPresets[0].bands };
+    const listener = vi.fn();
+    const stop = await api.subscribe(listener);
+    const invalidBands = [settings.bands.slice(1), [...settings.bands, settings.bands[0]], ...[
+      { gainDb: -12.1, q: 1.4 }, { gainDb: 12.1, q: 1.4 }, { gainDb: NaN, q: 1.4 },
+      { gainDb: 0, q: 0.39 }, { gainDb: 0, q: 4.01 }, { gainDb: 0, q: Infinity },
+    ].map((bad) => [bad, ...settings.bands.slice(1)])];
+    for (const bands of invalidBands) await expect(api.setEqualizer(target, { enabled: false, bands })).rejects.toMatchObject({ code: "demoValidation" });
+    for (const preampDb of [-24.01, 0.01, NaN, Infinity, -Infinity, "0"]) {
+      const equalizer = { ...settings, preampDb } as EqualizerSettings;
+      await expect(api.setEqualizer(target, equalizer)).rejects.toMatchObject({ code: "demoValidation", message: expect.stringMatching(/preamp/) });
+      await expect(api.saveAudioProfile({ ...initial.profiles[0], equalizer })).rejects.toMatchObject({ code: "demoValidation" });
+    }
+    for (const name of [other, initial.audio.inputs[0].nodeName, "missing"]) {
+      await expect(api.setEqualizer(name, settings)).rejects.toMatchObject({ code: "demoValidation" });
+      await expect(api.setSurround(true, name)).rejects.toMatchObject({ code: "demoValidation" });
+    }
+    await expect(api.saveAudioProfile({ ...initial.profiles[0], equalizer: { enabled: true, bands: [] } })).rejects.toMatchObject({ code: "demoValidation" });
+    expect(listener).not.toHaveBeenCalled();
+    expect(await api.getSnapshot()).toEqual(initial);
+
+    const on = await api.setEqualizer(target, settings);
+    expect(on.audio).toMatchObject({ selectedOutput: target, equalizerOutput: target, surroundState: "off" });
+    await expect(api.setEqualizer(on.audio.defaultOutput!, settings)).rejects.toMatchObject({ code: "demoValidation" });
+    expect((await api.setSurround(true, target)).audio.surroundState).toBe("on");
+    expect((await api.setSurround(false)).audio.equalizerOutput).toBe(target);
+    expect(ipc.invoke).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("restores each output's settings and applies optional profile EQ without changing physical levels", async () => {
+    const api = createDemoApi();
+    const initial = await api.getSnapshot();
+    const legacy = initial.profiles[0];
+    const headset = legacy.outputNodeName;
+    const speakers = initial.audio.outputs.find((node) => node.nodeName !== headset)!;
+    const voice: EqualizerSettings = { enabled: true, bands: equalizerPresets[1].bands };
+    const gaming: EqualizerSettings = { enabled: true, bands: equalizerPresets[2].bands, preampDb: -24 };
+    await api.setEqualizer(headset, voice);
+    expect((await api.setDefaultOutput(speakers.nodeName)).audio.equalizerOutput).toBeNull();
+    const profile = { ...legacy, id: "28cbd9f0-6134-48a6-8ade-8b476911e6e4", name: "Desk gaming", outputNodeName: speakers.nodeName, volume: 0.91, hrtf: null, equalizer: gaming };
+    expect((await api.saveAudioProfile(profile)).audio.equalizers).toEqual({ [headset]: voice });
+    const applied = await api.applyAudioProfile(profile.id);
+    expect(applied.audio).toMatchObject({ equalizers: { [headset]: voice, [speakers.nodeName]: gaming }, equalizerOutput: speakers.nodeName, surroundState: "off" });
+    expect(applied.audio.outputs.find((node) => node.nodeName === speakers.nodeName)?.volume).toBe(speakers.volume);
+    expect(applied.audio.outputs.find((node) => node.nodeName === applied.audio.defaultOutput)).toMatchObject({ isVirtual: true, channels: ["FL", "FR"], volume: 0.91 });
+    const reused = await api.applyAudioProfile(legacy.id);
+    expect(reused.audio.equalizerOutput).toBe(headset);
+    expect(reused.audio.equalizers).toEqual(applied.audio.equalizers);
+    const bypassed = await api.setEqualizer(headset, { ...voice, enabled: false });
+    expect(bypassed.audio.defaultOutput).toBe(headset);
+    expect((await api.setDefaultOutput(speakers.nodeName)).audio.equalizerOutput).toBe(speakers.nodeName);
+    await api.saveAudioProfile({ ...legacy, equalizer: null });
+    const restored = await api.applyAudioProfile(legacy.id);
+    expect(restored.audio).toMatchObject({ equalizerOutput: null, defaultOutput: headset, equalizers: { [headset]: { ...voice, enabled: false }, [speakers.nodeName]: gaming } });
   });
 });
