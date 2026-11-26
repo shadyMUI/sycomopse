@@ -1,6 +1,24 @@
 use crate::models::*;
 use crate::providers::{identities_match, unique_identity_match, valid_serial};
 
+/// Serialize read-modify-publish operations on the device list, not unrelated snapshots.
+#[cfg(all(target_os = "linux", any(feature = "desktop", test)))]
+#[derive(Default)]
+pub(crate) struct DeviceUpdates(tokio::sync::Mutex<()>);
+
+#[cfg(all(target_os = "linux", any(feature = "desktop", test)))]
+impl DeviceUpdates {
+    pub(crate) async fn run<T>(
+        &self,
+        snapshot: &tokio::sync::RwLock<Snapshot>,
+        update: impl AsyncFnOnce(Vec<Device>) -> T,
+    ) -> T {
+        let _guard = self.0.lock().await;
+        let previous = snapshot.read().await.devices.clone();
+        update(previous).await
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UsbMetadata {
     pub identity: DeviceIdentity,
@@ -76,6 +94,75 @@ pub fn usb_device(usb: &UsbMetadata) -> Option<Device> {
         output_node_names: Vec::new(),
         limitations,
     })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod device_update_tests {
+    use super::*;
+    use tokio::sync::{oneshot, RwLock};
+
+    #[tokio::test]
+    async fn slow_remapping_does_not_overwrite_new_dpi_or_restore_a_removed_device() {
+        let mouse = |port: &str| {
+            usb_device(&UsbMetadata {
+                identity: DeviceIdentity {
+                    physical_path: Some(port.into()),
+                    vendor_id: Some(0x1532),
+                    product_id: Some(0x00b8),
+                    ..DeviceIdentity::default()
+                },
+                name: String::new(),
+                is_audio: false,
+                bus_alias: None,
+                instance: port.into(),
+            })
+            .unwrap()
+        };
+        let mut connected = mouse("port-1");
+        connected.values.dpi = Some(DpiValue { x: 800, y: 800 });
+        let snapshot = RwLock::new(Snapshot {
+            devices: vec![connected, mouse("port-2")],
+            ..Snapshot::default()
+        });
+        let updates = DeviceUpdates::default();
+        let (started, observing) = oneshot::channel();
+        let (resume, waiting) = oneshot::channel();
+
+        let remapping = updates.run(&snapshot, async |mut devices| {
+            started.send(()).unwrap();
+            waiting.await.unwrap();
+            devices[0].values.remapping = Some(RemappingValues {
+                enabled: true,
+                ..RemappingValues::default()
+            });
+            snapshot.write().await.devices = devices;
+        });
+        let hardware = async {
+            observing.await.unwrap();
+            let mut refresh = std::pin::pin!(updates.run(&snapshot, async |mut devices| {
+                devices.truncate(1);
+                devices[0].values.dpi = Some(DpiValue { x: 1600, y: 1600 });
+                snapshot.write().await.devices = devices;
+            }));
+            // Try the hardware refresh while D-Bus readback for remapping is paused.
+            let already_finished = tokio::select! {
+                biased;
+                () = &mut refresh => true,
+                () = std::future::ready(()) => false,
+            };
+            resume.send(()).unwrap();
+            if !already_finished {
+                refresh.await;
+            }
+        };
+        tokio::join!(remapping, hardware);
+
+        let snapshot = snapshot.read().await;
+        assert_eq!(snapshot.devices.len(), 1);
+        let values = &snapshot.devices[0].values;
+        assert_eq!(values.dpi, Some(DpiValue { x: 1600, y: 1600 }));
+        assert!(values.remapping.as_ref().is_some_and(|item| item.enabled));
+    }
 }
 
 pub fn usb_physical_path(value: &str) -> Option<String> {

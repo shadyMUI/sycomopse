@@ -161,7 +161,7 @@ def prepare_cloud(cache):
 def input_files(bundle=None):
     files = {}
     source = HERE
-    for name in ("common.py", "build.py", "sources.py", "staging.py", "targets.json"):
+    for name in ("common.py", "build.py", "audio_runtime.py", "sources.py", "staging.py", "targets.json"):
         files["source/packaging/" + name] = source / name
     for name in ("smoke.py", "gates.py", "matrix.py", "vm.py", "vm_guest.py", "native_report.py"):
         files["source/packaging/ci/" + name] = source / "ci" / name

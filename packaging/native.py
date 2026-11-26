@@ -95,9 +95,14 @@ def configure(package_format, upgrade=False, runner=run, status=STATUS,
             return record
         if first_configuration or (restore_enabled and state == "disabled"):
             if package_format == "deb":
-                if not available("deb-systemd-helper"):
-                    raise PackagingError("init-system-helpers is required by the native DEB")
-                runner(["deb-systemd-helper", "enable", ENGINE])
+                if first_configuration:
+                    if not available("deb-systemd-helper"):
+                        raise PackagingError("init-system-helpers is required by the native DEB")
+                    runner(["deb-systemd-helper", "enable", ENGINE])
+                else:
+                    # The Debian helper preserves removed links as an admin
+                    # choice. Here the checkpoint proves our removal did it.
+                    runner(["systemctl", *scope, "enable", ENGINE])
             else:
                 # Package preset may be overridden by an administrator's earlier rule.
                 runner(["systemctl", *scope, "preset", ENGINE])

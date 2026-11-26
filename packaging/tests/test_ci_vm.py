@@ -97,6 +97,10 @@ def frame(expected, value):
 
 
 class SignatureAndInputTests(unittest.TestCase):
+    def test_guest_inventory_includes_build_audio_runtime_dependency(self):
+        files = vm.input_files()
+        self.assertEqual(files["source/packaging/audio_runtime.py"], PACKAGING / "audio_runtime.py")
+
     def test_malformed_or_short_digests_are_rejected(self):
         for value in (None, "", "abc", "A" * 64, "sha256:" + "a" * 64, "g" * 64):
             with self.subTest(value=value), self.assertRaises(common.PackagingError):

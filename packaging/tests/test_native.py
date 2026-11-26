@@ -15,6 +15,7 @@ from build import native_requirements
 class Commands:
     def __init__(self, enabled="disabled", active=False, preset=True, policy=True, failures=()):
         self.enabled, self.active, self.preset, self.policy = enabled, active, preset, policy
+        self.deb_registered = False
         self.failures = set(failures)
         self.calls = []
 
@@ -29,6 +30,12 @@ class Commands:
         elif command[:2] == ["systemctl", "is-active"]:
             stdout, code = ("active\n", 0) if self.active else ("inactive\n", 3)
         elif command[:2] == ["deb-systemd-helper", "enable"]:
+            # Noble's helper only applies the preset on first registration.
+            # If the links are gone on reinstall, it does not recreate them.
+            if not self.deb_registered and self.preset:
+                self.enabled = "enabled"
+            self.deb_registered = True
+        elif command[:2] == ["systemctl", "enable"]:
             self.enabled = "enabled"
         elif command[:2] == ["systemctl", "preset"]:
             self.enabled = "enabled" if self.preset else "disabled"
@@ -163,6 +170,8 @@ class NativeLifecycleTests(unittest.TestCase):
                         self.assertEqual(report["enabled"], enabled == "enabled")
                         self.assertEqual(report["running"], enabled == "enabled" and active)
                         self.assertNotIn("removal", common.json_file(status))
+                        if format == "deb" and enabled == "enabled":
+                            self.assertIn(["systemctl", "enable", common.ENGINE], commands.calls)
                         if enabled == "disabled":
                             self.assertFalse(any(command[1] in ("enable", "preset") for command in commands.calls))
                         if not active or enabled == "disabled":

@@ -17,9 +17,9 @@ from ci.gates import require_native_preconditions, require_unpromoted
 
 
 def verify_isolation(uid_map, devices=Path("/dev")):
-    """Validate initial-host UID mappings and the private device tree."""
+    """Validate the private device tree and return UID mappings as JSON arrays."""
     try:
-        mappings = [tuple(int(field) for field in line.split()) for line in uid_map.splitlines() if line.strip()]
+        mappings = [[int(field) for field in line.split()] for line in uid_map.splitlines() if line.strip()]
     except ValueError as error:
         raise PackagingError("Cannot verify the smoke user namespace") from error
     if not mappings or any(len(item) != 3 or item[0] < 0 or item[1] <= 0 or item[2] <= 0 for item in mappings) or not any(item[0] == 0 for item in mappings):
@@ -64,7 +64,7 @@ def main(vm_contract=None, observer=None):
             raise PackagingError("Native service smoke requires systemd as PID 1")
         import pwd
         if args.builder_uid != 1000 or pwd.getpwnam("builder").pw_uid != args.builder_uid:
-            raise PackagingError("Rootless smoke requires the keep-id builder UID 1000 mapping")
+            raise PackagingError("Rootless smoke requires the separate builder session user UID 1000")
         bundle, uid, username = args.bundle.resolve(), args.builder_uid, "builder"
     else:
         from ci.vm_guest import INPUT, require_guest
@@ -73,6 +73,8 @@ def main(vm_contract=None, observer=None):
     manifest, original_sha = verify_bundle(bundle, vm_contract["manifest_sha256"] if vm_contract else None)
     require_native_preconditions(manifest)
     require_unpromoted(manifest)
+    if vm_contract is None and bundle.stat().st_uid != 0:
+        raise PackagingError("Native smoke requires the bundle owner to map to container root")
     release = parse_os_release(regular_bytes(Path("/etc/os-release").resolve(), 65536, owner=0).decode())
     target = target_for(release, allow_compatible=False)
     if target["id"] != manifest["target"]["id"]:
@@ -196,8 +198,6 @@ def main(vm_contract=None, observer=None):
     native_validation = {key: value for key, value in manifest["validation"].items()
                          if key.startswith("native_smoke") or key in ("linux_hardware", "graphical_login_reboot", "audio_hardware", "dkms_host_kernel")}
     update_validation(bundle, original_sha, native_validation)
-    for path in (bundle / "manifest.json", bundle / "manifest.sha256"):
-        os.chown(path, uid, -1)
     print(json.dumps({"native_smoke": "passed", "target": target["id"], "steps": steps}, indent=2))
 
 

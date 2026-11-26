@@ -66,6 +66,7 @@ export default function App({ api: injectedApi }: { api?: HubApi }) {
     setSelectedMouseId(null);
     setAudioFocus((current) => ({ output: null, deviceId: null, token: current.token + 1 }));
     void (async () => {
+      // Register first so an update cannot fall between the initial read and live events.
       try {
         const stop = await api.subscribe((incoming) => { if (alive) acceptSnapshot(incoming, generation); });
         if (alive) unsubscribe = stop;
@@ -73,8 +74,7 @@ export default function App({ api: injectedApi }: { api?: HubApi }) {
       } catch (error) {
         if (alive) setErrors((current) => ({ ...current, subscription: asAppError(error) }));
       }
-    })();
-    void (async () => {
+      if (!alive) return;
       try {
         acceptSnapshot(await api.getSnapshot(), generation);
       } catch (error) {

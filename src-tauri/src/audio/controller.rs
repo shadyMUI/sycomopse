@@ -210,14 +210,7 @@ impl AudioController {
                         Err(error) => self.reason = Some(error.message),
                     }
                 }
-                if self.selected_output.is_none() {
-                    let defaults = self.registry.defaults();
-                    self.selected_output = defaults.0.into_iter().chain(defaults.1).find(|name| {
-                        self.registry.node(name).is_ok_and(|node| {
-                            !node.is_virtual && node.media_class.starts_with("Audio/Sink")
-                        })
-                    });
-                }
+                self.select_initial_output();
                 self.recover_pending().await?;
                 self.enforce_safety().await?;
             } else if self.filter.is_some() {
@@ -410,10 +403,9 @@ impl AudioController {
                 #[cfg(target_os = "linux")]
                 {
                     // Queued snapshots may predate a newer read; never tombstone
-                    // that newer instance from the stale monitor payload.
-                    self.read_registry().await?;
-                    self.recover_pending().await?;
-                    self.enforce_safety().await?;
+                    // that newer instance from the stale monitor payload. The
+                    // first successful read also runs the normal initialization.
+                    self.refresh().await?;
                 }
             }
             AudioEvent::Changed(objects) => {
@@ -422,9 +414,14 @@ impl AudioController {
                 let _ = resync;
                 #[cfg(target_os = "linux")]
                 {
+                    if !self.available {
+                        return self.refresh().await;
+                    }
                     if resync {
                         self.read_registry().await?;
                     }
+                    // WirePlumber may set the default after the first snapshot.
+                    self.select_initial_output();
                     self.enforce_safety().await?;
                 }
             }
@@ -435,6 +432,17 @@ impl AudioController {
 
 #[cfg(target_os = "linux")]
 impl AudioController {
+    fn select_initial_output(&mut self) {
+        if self.selected_output.is_none() {
+            let (effective, configured, _) = self.registry.defaults();
+            self.selected_output = effective.into_iter().chain(configured).find(|name| {
+                self.registry.node(name).is_ok_and(|node| {
+                    !node.is_virtual && node.media_class.starts_with("Audio/Sink")
+                })
+            });
+        }
+    }
+
     pub(crate) async fn resolve_hrtf(&self, reference: &str) -> AppResult<HrtfSelection> {
         #[cfg(test)]
         if let Some(backend) = &self.test_backend {

@@ -1527,6 +1527,73 @@ async fn physical_profile_prepares_mute_and_volume_before_publishing_default() {
 }
 
 #[tokio::test]
+async fn first_monitor_snapshot_initializes_audio_after_an_offline_start() {
+    let (_directory, mut fixture) = controller();
+    let mut controller = AudioController::new(fixture.paths.clone());
+    let mut backend = fixture.test_backend.take().unwrap();
+    backend.selection.as_mut().unwrap().status.reference = SYSTEM_HRTF.into();
+    backend.fail_read = true;
+    controller.test_backend = Some(backend);
+
+    assert_eq!(
+        controller.refresh().await.unwrap_err().code,
+        ErrorCode::AudioUnavailable
+    );
+    assert!(!controller.snapshot().available);
+
+    let backend = controller.test_backend.as_mut().unwrap();
+    backend.fail_read = false;
+    let objects = backend.registry.objects.values().cloned().collect();
+    controller
+        .handle_event(AudioEvent::Snapshot(objects))
+        .await
+        .unwrap();
+
+    let snapshot = controller.snapshot();
+    assert!(snapshot.available);
+    assert_eq!(snapshot.selected_output.as_deref(), Some(HEADSET));
+    let hrtf = snapshot.hrtf.unwrap();
+    assert_eq!(hrtf.reference, SYSTEM_HRTF);
+    assert!(hrtf.readable);
+    assert!(snapshot.can_enable_surround);
+    assert!(controller.test_backend.as_ref().unwrap().actions.is_empty());
+}
+
+#[tokio::test]
+async fn monitor_selects_the_initial_output_when_default_metadata_arrives_late() {
+    let (_directory, mut fixture) = controller();
+    let mut controller = AudioController::new(fixture.paths.clone());
+    let mut backend = fixture.test_backend.take().unwrap();
+    backend.selection.as_mut().unwrap().status.reference = SYSTEM_HRTF.into();
+    let metadata = backend.registry.objects.remove(&21).unwrap();
+    let objects = backend.registry.objects.values().cloned().collect();
+    controller.test_backend = Some(backend);
+    controller
+        .handle_event(AudioEvent::Snapshot(objects))
+        .await
+        .unwrap();
+    assert!(controller.snapshot().available);
+    assert!(controller.snapshot().selected_output.is_none());
+    assert!(!controller.snapshot().can_enable_surround);
+
+    controller
+        .test_backend
+        .as_mut()
+        .unwrap()
+        .registry
+        .objects
+        .insert(21, metadata.clone());
+    controller
+        .handle_event(AudioEvent::Changed(vec![metadata]))
+        .await
+        .unwrap();
+
+    let snapshot = controller.snapshot();
+    assert_eq!(snapshot.selected_output.as_deref(), Some(HEADSET));
+    assert!(snapshot.can_enable_surround);
+}
+
+#[tokio::test]
 async fn queued_snapshot_cannot_remove_an_instance_already_seen_by_a_newer_read() {
     let (_directory, mut controller) = controller();
     controller

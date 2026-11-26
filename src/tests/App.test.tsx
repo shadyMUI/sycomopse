@@ -16,13 +16,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function controlledApi(initial: Snapshot) {
+function controlledApi(initial: Snapshot, registration?: Promise<void>) {
   let current = clone(initial);
   const listeners = new Set<(snapshot: Snapshot) => void>();
   const api: HubApi = {
     ...createDemoApi(), demo: initial.demo,
     getSnapshot: vi.fn(async () => clone(current)),
     subscribe: vi.fn(async (listener: (snapshot: Snapshot) => void) => {
+      if (registration) await registration;
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     }),
@@ -894,6 +895,37 @@ describe("filter routing and readback", () => {
 });
 
 describe("revisioni, hotplug e lifecycle", () => {
+  it("legge anche gli aggiornamenti che avvengono mentre si registra il listener", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    const registration = deferred<void>();
+    const { api, emit } = controlledApi(initial, registration.promise);
+    render(<App api={api} />);
+    await waitFor(() => expect(api.subscribe).toHaveBeenCalledOnce());
+
+    const latest = clone(initial);
+    latest.revision = 4;
+    latest.devices[0].values.dpi = { x: 1800, y: 1800 };
+    await act(async () => {
+      emit(latest);
+      registration.resolve();
+    });
+
+    expect(screen.getByText(/(?:READING \/ 0004|LETTURA \/ 0004)/)).toBeVisible();
+    expect(screen.getByText("1800 DPI", { selector: "strong" })).toBeVisible();
+    expect(api.getSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("mostra la lettura iniziale anche se la sottoscrizione fallisce", async () => {
+    const initial = await createDemoApi(1).getSnapshot();
+    const { api } = controlledApi(initial);
+    vi.mocked(api.subscribe).mockRejectedValueOnce(new Error("Listener non disponibile"));
+    await dashboard(api);
+
+    expect(screen.getByText("Live updates unavailable")).toBeVisible();
+    expect(screen.getByTestId("device-card")).toBeVisible();
+    expect(api.getSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("ignora eventi e risposte mutazione piu vecchi della snapshot confermata", async () => {
     const user = userEvent.setup();
     const initial = await createDemoApi(1).getSnapshot();

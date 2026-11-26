@@ -53,7 +53,7 @@ pub(crate) struct AppState {
     #[cfg(target_os = "linux")]
     hardware: Mutex<()>,
     #[cfg(target_os = "linux")]
-    remapping_lock: Mutex<()>,
+    device_updates: devices::DeviceUpdates,
     #[cfg(target_os = "linux")]
     audio: Mutex<audio::AudioController>,
     #[cfg(target_os = "linux")]
@@ -81,7 +81,7 @@ impl AppState {
             #[cfg(target_os = "linux")]
             hardware: Mutex::new(()),
             #[cfg(target_os = "linux")]
-            remapping_lock: Mutex::new(()),
+            device_updates: devices::DeviceUpdates::default(),
             #[cfg(target_os = "linux")]
             audio: Mutex::new(audio),
             #[cfg(target_os = "linux")]
@@ -194,25 +194,51 @@ impl AppState {
         include_batteries: bool,
         preserve: Option<(Device, bool)>,
     ) -> Snapshot {
-        let previous = self.snapshot.read().await.clone();
-        let nodes: Vec<_> = previous
-            .audio
-            .outputs
-            .iter()
-            .chain(&previous.audio.inputs)
-            .cloned()
-            .collect();
-        let mut discovery = devices::discover(&nodes, include_batteries).await;
+        let nodes: Vec<_> = {
+            let snapshot = self.snapshot.read().await;
+            snapshot
+                .audio
+                .outputs
+                .iter()
+                .chain(&snapshot.audio.inputs)
+                .cloned()
+                .collect()
+        };
+        // Lock order is hardware -> device_updates. Let remapping publish while
+        // the hardware providers are being queried, then read the latest devices.
+        let discovery = devices::discover(&nodes, include_batteries).await;
+        self.device_updates
+            .run(&self.snapshot, async |previous| {
+                self.publish_hardware_discovery(
+                    app,
+                    discovery,
+                    &previous,
+                    include_batteries,
+                    preserve.as_ref(),
+                )
+                .await
+            })
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn publish_hardware_discovery(
+        &self,
+        app: &AppHandle,
+        mut discovery: Discovery,
+        previous: &[Device],
+        include_batteries: bool,
+        preserve: Option<&(Device, bool)>,
+    ) -> Snapshot {
         discovery.devices.extend(
             previous
-                .devices
                 .iter()
                 .filter(|device| device.provider == ProviderKind::Inputremapper)
                 .cloned(),
         );
         self.remapping.decorate(&mut discovery).await;
         for device in &mut discovery.devices {
-            let old = previous.devices.iter().find(|old| {
+            let old = previous.iter().find(|old| {
                 old.id == device.id
                     || crate::providers::identities_match(&old.identity, &device.identity)
             });
@@ -241,7 +267,7 @@ impl AppState {
                 }
             }
             // An unconfirmed ratbag staging value must not replace the last confirmed UI value.
-            if let Some((old_dev, is_dpi)) = &preserve {
+            if let Some((old_dev, is_dpi)) = preserve {
                 if old_dev.id == device.id
                     || crate::providers::identities_match(&old_dev.identity, &device.identity)
                 {
@@ -274,10 +300,9 @@ impl AppState {
     }
 
     #[cfg(target_os = "linux")]
-    async fn refresh_remapping_locked(&self, app: &AppHandle) -> Snapshot {
-        let previous = self.snapshot.read().await.clone();
+    async fn refresh_remapping_locked(&self, app: &AppHandle, devices: Vec<Device>) -> Snapshot {
         let mut discovery = Discovery {
-            devices: previous.devices,
+            devices,
             diagnostics: Vec::new(),
         };
         self.remapping.decorate(&mut discovery).await;
@@ -302,45 +327,44 @@ impl AppState {
         self.require_platform()?;
         #[cfg(target_os = "linux")]
         {
-            let _guard = self.remapping_lock.lock().await;
-            let device = self
-                .snapshot
-                .read()
-                .await
-                .devices
-                .iter()
-                .find(|device| device.id == device_id)
-                .cloned()
-                .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::DeviceNotFound,
-                        "Mouse non presente nella snapshot.",
-                    )
-                })?;
-            let result = match bindings {
-                Some(bindings) => {
-                    self.remapping
-                        .apply(&device, bindings, auto_apply, allow_weak_identity)
-                        .await
-                }
-                None => self.remapping.disable(&device).await,
-            };
-            let snapshot = self.refresh_remapping_locked(app).await;
-            if let Err(error) = result {
-                self.publish(app, |snapshot| {
-                    snapshot
-                        .diagnostics
-                        .retain(|item| item.id != "remapping-command");
-                    snapshot.diagnostics.push(diagnostic_from_error(
-                        "remapping-command",
-                        ProviderKind::Inputremapper,
-                        &error,
-                    ));
+            self.device_updates
+                .run(&self.snapshot, async |devices| {
+                    self.require_platform()?;
+                    let device = devices
+                        .iter()
+                        .find(|device| device.id == device_id)
+                        .ok_or_else(|| {
+                            AppError::new(
+                                ErrorCode::DeviceNotFound,
+                                "Mouse non presente nella snapshot.",
+                            )
+                        })?;
+                    let result = match bindings {
+                        Some(bindings) => {
+                            self.remapping
+                                .apply(device, bindings, auto_apply, allow_weak_identity)
+                                .await
+                        }
+                        None => self.remapping.disable(device).await,
+                    };
+                    let snapshot = self.refresh_remapping_locked(app, devices).await;
+                    if let Err(error) = result {
+                        self.publish(app, |snapshot| {
+                            snapshot
+                                .diagnostics
+                                .retain(|item| item.id != "remapping-command");
+                            snapshot.diagnostics.push(diagnostic_from_error(
+                                "remapping-command",
+                                ProviderKind::Inputremapper,
+                                &error,
+                            ));
+                        })
+                        .await;
+                        return Err(error);
+                    }
+                    Ok(snapshot)
                 })
-                .await;
-                return Err(error);
-            }
-            Ok(snapshot)
+                .await
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -824,9 +848,13 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            let _guard = remapping_state.remapping_lock.lock().await;
             remapping_state
-                .refresh_remapping_locked(&remapping_app)
+                .device_updates
+                .run(&remapping_state.snapshot, async |devices| {
+                    remapping_state
+                        .refresh_remapping_locked(&remapping_app, devices)
+                        .await
+                })
                 .await;
         }
     }));
@@ -837,6 +865,10 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
+            // The poll can also persist changes; don't interleave it with a device write.
+            let Ok(_hardware) = sync_state.hardware.try_lock() else {
+                continue;
+            };
             let devices = sync_state.snapshot.read().await.devices.clone();
             let mut hardware_changed = false;
             for device in &devices {
@@ -845,22 +877,22 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
                         crate::providers::openrazer::check_hardware_change(device).await
                     {
                         sync_state
-                            .publish(&sync_app, |snapshot| {
-                                for d in &mut snapshot.devices {
-                                    if d.id == device.id
-                                        || crate::providers::identities_match(
-                                            &d.identity,
-                                            &device.identity,
-                                        )
-                                    {
-                                        if let Some(dpi) = new_dpi {
-                                            d.values.dpi = Some(dpi);
+                            .device_updates
+                            .run(&sync_state.snapshot, async |_| {
+                                sync_state
+                                    .publish(&sync_app, |snapshot| {
+                                        if let Some(current) =
+                                            snapshot.devices.iter_mut().find(|d| d.id == device.id)
+                                        {
+                                            if let Some(dpi) = new_dpi {
+                                                current.values.dpi = Some(dpi);
+                                            }
+                                            if let Some(rate) = new_rate {
+                                                current.values.polling_rate = Some(rate);
+                                            }
                                         }
-                                        if let Some(rate) = new_rate {
-                                            d.values.polling_rate = Some(rate);
-                                        }
-                                    }
-                                }
+                                    })
+                                    .await
                             })
                             .await;
                         hardware_changed = true;
@@ -868,7 +900,9 @@ fn start_workers(app: &AppHandle, state: &Arc<AppState>) {
                 }
             }
             if hardware_changed {
-                sync_state.refresh_hardware(&sync_app, false).await;
+                sync_state
+                    .refresh_hardware_locked(&sync_app, false, None)
+                    .await;
             }
         }
     }));

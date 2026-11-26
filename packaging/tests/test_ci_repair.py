@@ -31,16 +31,14 @@ class SmokeIsolationTests(unittest.TestCase):
     def test_command_is_rootless_delegated_and_has_only_private_namespaces(self):
         command = matrix.smoke_command(["podman"], "fixture", "image", PurePosixPath("/repo"), PurePosixPath("/repo/out"), "sha256:" + "a" * 64)
         self.assertEqual(command[:7], ["systemd-run", "--user", "--scope", "--quiet", "--property=Delegate=yes", "--", "podman"])
-        for flag, expected in (("--userns", "keep-id:uid=1000,gid=1000"), ("--cgroupns", "private"),
-                               ("--pid", "private"), ("--ipc", "private"), ("--network", "private")):
-            self.assertEqual(values(command, flag), [expected])
+        for flag, expected in (("--user", "0:0"), ("--cgroupns", "private"), ("--pid", "private"),
+                               ("--ipc", "private"), ("--network", "private")):
+            self.assertEqual(values(command[7:], flag), [expected])
         self.assertEqual(values(command, "--volume"), ["/repo:/workspace:ro", "/repo/out:/artifacts:rw"])
         self.assertEqual(values(command, "--cap-drop"), ["ALL"])
         self.assertIn("no-new-privileges", command)
-        for forbidden in ("--privileged", "--device", "SYS_MODULE", "SYS_RAWIO", "NET_ADMIN", "MKNOD"):
+        for forbidden in ("--privileged", "--userns", "--device", "--device-cgroup-rule", "SYS_MODULE", "SYS_RAWIO", "NET_ADMIN", "MKNOD"):
             self.assertNotIn(forbidden, command)
-        self.assertEqual(set(values(command, "--device-cgroup-rule")),
-                         {"c 1:3 rw", "c 1:5 rw", "c 1:7 rw", "c 1:8 rw", "c 1:9 rw", "c 5:0 rw", "c 5:2 rw", "c 136:* rw"})
 
     def test_docker_has_no_systemd_privilege_fallback(self):
         with self.assertRaisesRegex(common.PackagingError, "Docker"):
@@ -54,7 +52,9 @@ class SmokeIsolationTests(unittest.TestCase):
     def test_unprivileged_host_uid_mapping_is_required(self):
         with tempfile.TemporaryDirectory() as directory:
             mappings = smoke.verify_isolation("0 100000 1000\n1000 1001 1\n1001 101000 64535\n", Path(directory))
-            self.assertEqual(mappings[0], (0, 100000, 1000))
+            self.assertEqual(mappings[0], [0, 100000, 1000])
+            self.assertEqual(json.loads(json.dumps(mappings)), mappings)
+            self.assertEqual(smoke.verify_isolation("0 1000 1\n1 100000 65536\n", Path(directory))[0], [0, 1000, 1])
             for invalid in ("", "0 0 4294967295", "0 -1 1", "1 100000 1000", "0 100000", "not a map"):
                 with self.subTest(mapping=invalid), self.assertRaises(common.PackagingError):
                     smoke.verify_isolation(invalid, Path(directory))
@@ -92,7 +92,6 @@ class SmokeIsolationTests(unittest.TestCase):
                 patch.object(sys, "argv", ["smoke.py", "--bundle", directory, "--builder-uid", "1000"]), \
                 patch.object(smoke.sys, "platform", "linux"), \
                 patch.object(smoke.os, "geteuid", return_value=0, create=True), \
-                patch.object(smoke.os, "chown", create=True), \
                 patch.dict(os.environ, {"PH_CI_SMOKE": "1", "PH_CI_SMOKE_EXECUTOR": "rootless-podman", "PH_CI_SMOKE_IMAGE_ID": "sha256:" + "a" * 64, "PH_CI_SMOKE_HOST_UID_MAP": "0 100000 65536\n"}), \
                 patch.dict(sys.modules, {"pwd": SimpleNamespace(getpwnam=lambda name: SimpleNamespace(pw_uid=1000))}), \
                 patch.object(Path, "is_file", return_value=True), \
@@ -107,8 +106,8 @@ class SmokeIsolationTests(unittest.TestCase):
             self.assertFalse((Path(directory) / "manifest.json").exists())
             self.assertEqual(manifest["validation"]["native_smoke"], "passed")
 
-    def test_rootless_smoke_missing_failed_or_legacy_software_blocks_before_transaction(self):
-        for invalid in ("missing", "failed", "elf", "imports"):
+    def test_rootless_smoke_blocks_invalid_inputs_before_transaction(self):
+        for invalid in ("missing", "failed", "elf", "imports", "ownership"):
             validation = {"native_smoke": "not-run", "software": {name: "passed" for name in SOFTWARE_GATES}, "elf": "passed", "python_imports": "passed"}
             if invalid == "missing":
                 del validation["software"]
@@ -116,7 +115,7 @@ class SmokeIsolationTests(unittest.TestCase):
                 validation["software"]["worker_alsa_phase_safety"] = "failed"
             elif invalid == "elf":
                 validation["elf"] = "not-run"
-            else:
+            elif invalid == "imports":
                 validation["python_imports"] = "failed"
             manifest = {"target": {"id": "ubuntu-24.04"}, "package": {"file": "fixture.deb"}, "validation": validation}
             def fixture_bytes(path, maximum, owner=None):
@@ -126,16 +125,21 @@ class SmokeIsolationTests(unittest.TestCase):
             with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory, \
                     patch.object(sys, "argv", ["smoke.py", "--bundle", directory, "--builder-uid", "1000"]), \
                     patch.object(smoke.sys, "platform", "linux"), patch.object(smoke.os, "geteuid", return_value=0, create=True), \
-                    patch.object(smoke.os, "chown", create=True), \
                     patch.dict(os.environ, {"PH_CI_SMOKE": "1", "PH_CI_SMOKE_EXECUTOR": "rootless-podman", "PH_CI_SMOKE_IMAGE_ID": "sha256:" + "a" * 64, "PH_CI_SMOKE_HOST_UID_MAP": "0 100000 65536\n"}), \
                     patch.dict(sys.modules, {"pwd": SimpleNamespace(getpwnam=lambda name: SimpleNamespace(pw_uid=1000))}), \
                     patch.object(Path, "is_file", return_value=True), patch.object(smoke, "regular_bytes", side_effect=fixture_bytes), \
-                    patch.object(smoke, "verify_isolation", return_value=[(0, 100000, 65536)]), \
+                    patch.object(smoke, "verify_isolation", return_value=[[0, 100000, 65536]]), \
                     patch.object(smoke, "verify_bundle", return_value=(manifest, "a" * 64)), \
                     patch.object(smoke, "target_for", return_value={"id": "ubuntu-24.04", "manager": "apt"}), \
-                    patch.object(smoke, "run", side_effect=common.PackagingError("TRANSACTION REACHED")):
-                with self.assertRaisesRegex(common.PackagingError, "software|audit"):
+                    patch.object(smoke, "run", side_effect=common.PackagingError("TRANSACTION REACHED")) as executed:
+                bundle = Path(directory).resolve()
+                path_stat = Path.stat
+                def fixture_stat(path, *args, **kwargs):
+                    return SimpleNamespace(st_uid=1000) if path == bundle else path_stat(path, *args, **kwargs)
+                error = "bundle owner" if invalid == "ownership" else "software|audit"
+                with patch.object(Path, "stat", fixture_stat), self.assertRaisesRegex(common.PackagingError, error):
                     smoke.main()
+                executed.assert_not_called()
 
 
 class MatrixGateTests(unittest.TestCase):
@@ -175,7 +179,7 @@ class MatrixGateTests(unittest.TestCase):
                 patch.object(matrix.os, "getegid", return_value=1001, create=True), \
                 patch.object(matrix, "run", side_effect=command), \
                 patch.object(matrix, "verify_bundle", return_value=(self.manifest, "fixture")), \
-                contextlib.redirect_stdout(self.output):
+                contextlib.redirect_stdout(self.output), contextlib.redirect_stderr(io.StringIO()):
             matrix.main()
 
     def test_docker_native_smoke_fails_before_pull_build_or_output_creation(self):
@@ -233,6 +237,10 @@ class MatrixGateTests(unittest.TestCase):
 
     def test_rootless_build_maps_host_uid_to_builder_1000(self):
         self.invoke("--engine", "podman", "--skip-smoke")
+        probe = next(command for command in self.commands if "--entrypoint" in command)
+        self.assertEqual(values(probe, "--network"), ["none"])
+        for flag in ("--userns", "--volume"):
+            self.assertNotIn(flag, probe)
         build_command = next(command for command in self.commands if "build" in command)
         self.assertIn("BUILDER_UID=1000", build_command)
         self.assertIn("BUILDER_GID=1000", build_command)

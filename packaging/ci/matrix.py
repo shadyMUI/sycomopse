@@ -37,15 +37,16 @@ def smoke_command(runtime, container, image, repo, output, image_id):
     # SYS_ADMIN is confined to the rootless user namespace for systemd's private mounts.
     capabilities = ("CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "SETUID", "SETGID",
                     "SETPCAP", "KILL", "SYS_CHROOT", "SYS_ADMIN")
-    devices = ("c 1:3 rw", "c 1:5 rw", "c 1:7 rw", "c 1:8 rw", "c 1:9 rw",
-               "c 5:0 rw", "c 5:2 rw", "c 136:* rw")
+    # Rootless Podman rejects custom device rules. Use Podman's default private
+    # /dev without host device passthrough; smoke.py verifies it before installing.
+    # The default rootless UID map lets container root write the host's bundle
+    # without a keep-id layer copy. The in-container session user stays non-root.
     return [*runtime[:-1], "systemd-run", "--user", "--scope", "--quiet", "--property=Delegate=yes", "--",
             runtime[-1], "run", "--detach", "--name", container, "--platform", "linux/amd64",
-            "--userns", "keep-id:uid=1000,gid=1000", "--user", "0:0", "--systemd", "always",
+            "--user", "0:0", "--systemd", "always",
             "--cgroupns", "private", "--cgroups", "enabled", "--pid", "private", "--ipc", "private",
             "--network", "private", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             *[argument for capability in capabilities for argument in ("--cap-add", capability)],
-            *[argument for device in devices for argument in ("--device-cgroup-rule", device)],
             "--pids-limit", "512", "--memory", "2g",
             "--tmpfs", "/run:rw,nosuid,nodev,mode=755", "--tmpfs", "/run/lock:rw,nosuid,nodev",
             "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--volume", f"{repo}:/workspace:ro",
@@ -82,8 +83,9 @@ def main():
     image_id = inspect_image_id(runtime, image)
     sdk_tag = f"peripheral-hub-sdk:{target['id']}-{image_id.removeprefix('sha256:')[:12]}"
     run([*runtime, "tag", image, sdk_tag])
-    userns = ["--userns", "keep-id:uid=1000,gid=1000"] if args.engine == "podman" else []
-    versions = run([*runtime, "run", "--rm", *userns, "--user", f"{uid}:{gid}", "--cap-drop", "ALL",
+    print(f"Checking {target['id']} SDK toolchain versions ...", file=sys.stderr, flush=True)
+    # No bind mounts here, so keep-id's potentially expensive layer copies are unnecessary.
+    versions = run([*runtime, "run", "--rm", "--network", "none", "--user", f"{uid}:{gid}", "--cap-drop", "ALL",
                     "--security-opt", "no-new-privileges", "--entrypoint", "/bin/sh", image, "-c",
                     "node --version && rustc --version && cargo --version"]).stdout.strip().splitlines()
     if len(versions) != 3 or versions[0] != "v24.11.0" or not versions[1].startswith("rustc 1.91.0 ") or not versions[2].startswith("cargo 1.91.0 "):
@@ -94,6 +96,9 @@ def main():
                           "toolchain": versions, "native_smoke": "not-run"}, indent=2))
         return
     output.mkdir(parents=True, exist_ok=True)
+    userns = ["--userns", "keep-id:uid=1000,gid=1000"] if args.engine == "podman" else []
+    preparation = " (Podman may first copy image layers)" if userns else ""
+    print(f"Starting {target['id']} application build{preparation} ...", file=sys.stderr, flush=True)
     run([*runtime, "run", "--rm", "--platform", "linux/amd64", *userns, "--user", f"{uid}:{gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--volume", f"{repo}:/workspace:rw", "--volume", f"{output}:/artifacts:rw", "--env", f"PH_BUILD_IMAGE_DIGEST={match[1]}", image, "--target", target["id"], "--output", "/artifacts"], capture=False, timeout=7200)
     bundle = output / f"peripheral-hub-0.1.0-{target['id']}-x86_64"
     if not args.skip_smoke:
@@ -125,6 +130,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except KeyboardInterrupt:
+        print("Build interrupted.", file=sys.stderr)
+        sys.exit(130)
     except (PackagingError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
