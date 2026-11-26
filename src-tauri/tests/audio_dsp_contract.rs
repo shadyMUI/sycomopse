@@ -713,7 +713,9 @@ async fn pcm_probe(
     );
     // Median non-silent 100 ms RMS: ignore startup/teardown and one-off transport transients.
     let mut blocks: Vec<f64> = bytes
-        .chunks_exact(4800 * 2 * 4)
+        .as_chunks::<{ 4800 * 2 * 4 }>()
+        .0
+        .iter()
         .map(|block| {
             (block
                 .as_chunks::<4>()
