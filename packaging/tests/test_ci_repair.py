@@ -7,6 +7,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -425,8 +426,8 @@ class SoftwareBuildGateTests(unittest.TestCase):
 
 
 class SDKDependencyTests(unittest.TestCase):
-    def invoke(self, runtime_only):
-        target = {"id": "ubuntu-24.04", "manager": "apt", "build": ["build-essential"],
+    def invoke(self, runtime_only, target_id="ubuntu-24.04", manager="apt"):
+        target = {"id": target_id, "manager": manager, "build": ["build-essential"],
                   "runtime": ["python3"], "headset": ["libhidapi-hidraw0"], "audio": ["wireplumber"]}
         def resolve(target, packages):
             return [{"name": name} for name in packages], []
@@ -449,6 +450,36 @@ class SDKDependencyTests(unittest.TestCase):
     def test_native_smoke_image_does_not_inherit_sdk_dependencies(self):
         command = self.invoke(True)
         self.assertEqual(command, ["apt-get", "install", "--yes", "--no-install-recommends", "python3"])
+
+    def test_fedora_smoke_image_installs_runuser_provider(self):
+        self.assertEqual(self.invoke(True, "fedora-44", "dnf"),
+                         ["dnf", "install", "--assumeyes", "python3", "util-linux"])
+        self.assertNotIn("util-linux", self.invoke(False, "fedora-44", "dnf"))
+
+
+class UbuntuSmokePolicyTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "policy-rc.d is a Linux shell script")
+    def test_stock_policy_allows_only_package_service(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "policy-rc.d"
+            policy.write_bytes(b"#!/bin/sh\nexit 101\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                dependencies.allow_ubuntu_smoke_autostart(policy)
+            for unit, expected in ((common.ENGINE, 0), ("systemd-udevd.service", 101),
+                                   (common.ENGINE + ".other", 101)):
+                with self.subTest(unit=unit):
+                    result = subprocess.run(["sh", str(policy), unit, "start"], check=False)
+                    self.assertEqual(result.returncode, expected)
+
+    def test_custom_and_missing_policies_are_left_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "policy-rc.d"
+            dependencies.allow_ubuntu_smoke_autostart(policy)
+            self.assertFalse(policy.exists())
+            original = b"#!/bin/sh\n# Site policy\nexit 101\n"
+            policy.write_bytes(original)
+            dependencies.allow_ubuntu_smoke_autostart(policy)
+            self.assertEqual(policy.read_bytes(), original)
 
 
 class WorkflowGateTests(unittest.TestCase):
