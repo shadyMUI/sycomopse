@@ -57,14 +57,48 @@ The user interface (GUI) and background session agents are licensed under the **
 
 ## Native Package Installation
 
-1. Find your exact **target ID** in the [distribution matrix](#distribution-support-matrix--ci-validation). A package built for another distribution is not interchangeable, even if it uses the same format.
-2. Obtain the **complete bundle** from a successful [Linux Native Packaging workflow](.github/workflows/linux-packaging.yml) run, if available, or [build that target locally](#building-native-distribution-packages). CI artifacts are named `peripheral-hub-0.1.0-<target>-x86_64` and retained for 14 days. `packaging/out/` is generated output, not a directory of prebuilt packages included in a clone.
-3. Extract the bundle and open a terminal in the directory containing **both `install.sh` and `manifest.json`**. Start as your normal desktop user, not with `sudo`:
+### 1. Choose and download the bundle
 
-   ```sh
-   sh install.sh install --dry-run
-   sh install.sh install
-   ```
+Check your distro version, architecture and Python version:
+
+```sh
+cat /etc/os-release
+uname -m
+python3 --version
+```
+
+Use the exact **target ID** from the [distribution matrix](#distribution-support-matrix--ci-validation). A package built for another distro or version is not interchangeable just because it uses the same format. **Pop!_OS 24.04 with `UBUNTU_CODENAME=noble` uses the `ubuntu-24.04` bundle.**
+
+On [GitHub Releases](https://github.com/shadyMUI/sycomopse/releases), download the matching `.tar.gz` and its `.tar.gz.sha256` file from **Assets**, if available. Do not download GitHub's automatic **Source code** archives to install the app, and do not extract or install just the `.deb`, `.rpm`, or `.pkg.tar.zst`. The installer needs the complete bundle, including `install.sh`, the manifest and its checksums.
+
+If there is no matching release asset, look for the matching bundle in a successful [Linux Native Packaging run](https://github.com/shadyMUI/sycomopse/actions/workflows/linux-packaging.yml) or [build that target locally](#building-native-distribution-packages). CI artifacts are named `peripheral-hub-0.1.0-<target>-x86_64` and retained for 14 days. `packaging/out/` is generated locally; cloning the repository does not download the packages.
+
+### 2. Verify, extract and preview
+
+Open a terminal where you downloaded both release files. This example is for Ubuntu 24.04 / Pop!_OS 24.04. For another build, set `archive` to the exact downloaded filename and `target` to its target ID.
+
+```sh
+archive='Sycomopse-0.1.0-ubuntu-24.04-x86_64-47a3cfe.tar.gz'
+target='ubuntu-24.04'
+
+sha256sum -c "${archive}.sha256" &&
+unpack_dir=$(mktemp -d ./sycomopse.XXXXXX) &&
+tar -xzf "$archive" -C "$unpack_dir" &&
+cd "$unpack_dir/peripheral-hub-0.1.0-${target}-x86_64" &&
+sh install.sh install --dry-run
+```
+
+For an Actions artifact, extract its ZIP instead, open the directory containing `install.sh` and `manifest.json`, and run `sh install.sh install --dry-run`. The installer verifies the internal manifest and file hashes. The dry run checks the target and shows the plan without installing anything. If verification or the dry run fails, stop there.
+
+### 3. Install and launch
+
+In the same bundle directory, as your normal desktop user, run:
+
+```sh
+sh install.sh install && sh install.sh status
+```
+
+Do not prefix the installer with `sudo`. It asks for administrative permissions when needed. After installation, open **Sycomopse** from the app menu or run `peripheral-hub` from the terminal. See [Repair, Verification & Removal](#repair-verification--removal) for maintenance commands.
 
 The wrapper checks the manifest and target and uses the native package manager for installation. The `--without-audio` and `--without-openrazer` options affect the wrapper's setup steps; they do **not** produce a smaller package or remove its declared dependencies. In particular, the Ubuntu, Debian, Arch and CachyOS packages currently require OpenRazer/DKMS even if you only use Audio.
 
