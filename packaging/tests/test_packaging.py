@@ -410,7 +410,7 @@ class IntegrityTests(unittest.TestCase):
 
 
 class HeadsetStagingTests(unittest.TestCase):
-    def stage_candidate(self, directory, mode, verified=None, license_name="license"):
+    def stage_candidate(self, directory, mode, verified=None, license_name="license", target_id=None, configured=None):
         root = Path(directory)
         rootfs, work, artifacts = root / "rootfs", root / "work", root / "artifacts"
         (rootfs / "usr/lib/peripheral-hub").mkdir(parents=True)
@@ -426,6 +426,8 @@ class HeadsetStagingTests(unittest.TestCase):
         binary = work / "headsetcontrol-build/headsetcontrol"
 
         def command(argv, **kwargs):
+            if argv[:2] == ["cmake", "-S"] and configured is not None:
+                configured.append(argv)
             if argv[:2] == ["cmake", "--build"]:
                 binary.parent.mkdir(parents=True, exist_ok=True)
                 binary.write_bytes(b"private CLI")
@@ -438,8 +440,18 @@ class HeadsetStagingTests(unittest.TestCase):
                 patch.object(staging, "elf_report"), \
                 patch.object(sources, "probe_headset", return_value=verified), \
                 patch.object(sources.shutil, "copyfile", wraps=sources.shutil.copyfile) as copied:
-            result = sources.headset_candidate(rootfs, {"headset_build": mode}, work, artifacts, root / "cache")
+            result = sources.headset_candidate(rootfs, {"id": target_id, "headset_build": mode}, work, artifacts, root / "cache")
         return result, rootfs, source, copied.call_args_list
+
+    def test_debian_12_uses_clang_and_libcxx_without_changing_debian_13(self):
+        for target in ("debian-12", "debian-13"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                configured = []
+                result, *_ = self.stage_candidate(directory, "source", target_id=target, configured=configured)
+                self.assertTrue(result["private"])
+                self.assertEqual(len(configured), 1)
+                for arg in ("-DCMAKE_CXX_COMPILER=clang++-19", "-DCMAKE_CXX_FLAGS=-stdlib=libc++ -static-libstdc++"):
+                    self.assertEqual(arg in configured[0], target == "debian-12")
 
     def test_private_candidate_stages_exact_upstream_lowercase_license_for_both_build_paths(self):
         for mode in ("source", "prebuilt"):

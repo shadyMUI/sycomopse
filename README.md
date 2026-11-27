@@ -73,6 +73,15 @@ On [GitHub Releases](https://github.com/shadyMUI/sycomopse/releases), download t
 
 If there is no matching release asset, look for the matching bundle in a successful [Linux Native Packaging run](https://github.com/shadyMUI/sycomopse/actions/workflows/linux-packaging.yml) or [build that target locally](#building-native-distribution-packages). CI artifacts are named `peripheral-hub-0.1.0-<target>-x86_64` and retained for 14 days. `packaging/out/` is generated locally; cloning the repository does not download the packages.
 
+**Debian 13 only:** The bundle requires PipeWire **1.4.10 or newer**. Debian 13's original 1.4.2 can accept a mute change without publishing the new state, so Sycomopse cannot confirm the change. If your PipeWire is older, follow the [official Debian Backports instructions](https://backports.debian.org/Instructions/) to enable `trixie-backports` manually, then run:
+
+```sh
+sudo apt update &&
+sudo apt install --no-remove -t trixie-backports pipewire pipewire-bin
+```
+
+If APT reports a version conflict, include the already-installed PipeWire companion packages it names (for example, `pipewire-pulse`, `pipewire-alsa` or `libspa-0.2-bluetooth`) in the same transaction and keep `--no-remove`. Log out and back in after upgrading to restart the audio session. Sycomopse's installer does not enable Debian Backports for you.
+
 ### 2. Verify, extract and preview
 
 Open a terminal where you downloaded both release files. This example is for Ubuntu 24.04 / Pop!_OS 24.04. For another build, set `archive` to the exact downloaded filename and `target` to its target ID.

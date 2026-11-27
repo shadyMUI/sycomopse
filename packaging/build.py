@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 from audio_runtime import PRIVATE_LIB, PREFIX as AUDIO_PREFIX, pipewire_private
@@ -88,6 +89,25 @@ def package_deb(rootfs, reports, dependencies, work, destination, version):
     return destination, run(["dpkg-deb", "--field", str(destination), "Depends"]).stdout.strip().split(", ")
 
 
+def makepkg_process_limits(cgroup=Path("/sys/fs/cgroup"), proc=Path("/proc")):
+    # Do not start any new commands: makepkg can fail because no task slots remain.
+    import resource
+    pids = {}
+    for name in ("pids.current", "pids.max", "pids.peak", "pids.events"):
+        try:
+            pids[name] = (cgroup / name).read_text().strip()
+        except OSError:
+            continue
+    states = Counter()
+    for entry in proc.glob("[0-9]*/stat"):
+        try:
+            state = entry.read_text(errors="replace").rpartition(")")[2].split()[0]
+        except (OSError, IndexError):
+            continue
+        states[state] += 1
+    return {"cgroup": pids, "rlimit_nproc": resource.getrlimit(resource.RLIMIT_NPROC), "process_states": dict(states)}
+
+
 def package_arch(rootfs_tar, rootfs, reports, dependencies, work, destination, version):
     arch = Path(work) / "arch"
     arch.mkdir()
@@ -108,7 +128,11 @@ def package_arch(rootfs_tar, rootfs, reports, dependencies, work, destination, v
     deps_file = arch / "native-depends"
     deps_file.write_text("\n".join(dependencies) + "\n", encoding="utf-8")
     env = dict(os.environ, PH_VERSION=version, PH_ROOTFS_SHA256=digest(regular_bytes(rootfs_tar, 2 ** 31)), PH_DEPENDS_SHA256=digest(deps_file.read_bytes()), PKGDEST=str(Path(destination).resolve()))
-    run(["makepkg", "--cleanbuild", "--nodeps", "--noconfirm"], cwd=arch, env=env, capture=False, timeout=600)
+    try:
+        run(["makepkg", "--cleanbuild", "--nodeps", "--noconfirm"], cwd=arch, env=env, capture=False, timeout=600)
+    except PackagingError:
+        print("makepkg process limits: " + json.dumps(makepkg_process_limits(), sort_keys=True), file=sys.stderr, flush=True)
+        raise
     packages = list(Path(destination).glob(f"{APP}-{version}-1-x86_64.pkg.tar.*"))
     if len(packages) != 1:
         raise PackagingError("makepkg did not produce exactly one native package")

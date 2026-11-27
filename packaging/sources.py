@@ -105,6 +105,8 @@ def headset_candidate(rootfs, target, work, artifacts, cache):
     try:
         if target["headset_build"] == "source":
             extra_cxx = ["-DCMAKE_CXX_FLAGS=-static-libstdc++ -static-libgcc"] if target.get("id") == "ubuntu-22.04" else []
+            if target.get("id") == "debian-12":
+                extra_cxx = ["-DCMAKE_CXX_COMPILER=clang++-19", "-DCMAKE_CXX_FLAGS=-stdlib=libc++ -static-libstdc++"]
             run(["cmake", "-S", str(source), "-B", str(binary.parent), "-DCMAKE_BUILD_TYPE=Release", f"-DHEADSETCONTROL_VERSION={lock['version']}", "-DBUILD_SHARED_LIBRARY=OFF", *extra_cxx], capture=False, timeout=120)
             run(["cmake", "--build", str(binary.parent), "--parallel", str(os.cpu_count() or 2)], capture=False, timeout=600)
             run(["ctest", "--test-dir", str(binary.parent), "--output-on-failure"], capture=False, timeout=120)

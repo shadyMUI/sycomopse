@@ -285,14 +285,15 @@ def package_name(requirement):
 
 def repository_version(manager, package):
     name = package_name(package)
+    zypper_capability = name == "python3" or "(" in name
     commands = {
         "apt": ["apt-cache", "policy", name],
         "pacman": ["pacman", "-Si", "--", name],
         "dnf": ["dnf", "repoquery", "--available", "--latest-limit=1", "--qf", "%{version}-%{release}", name],
-        "zypper": ["zypper", "--xmlout", "search", "--details", "--match-exact", "--type", "package", name],
+        "zypper": ["zypper", "--xmlout", "--disable-system-resolvables", "search", "--details", "--match-exact", "--type", "package"],
     }
-    if manager == "zypper" and "(" in name:
-        commands[manager].insert(-1, "--provides")
+    if manager == "zypper":
+        commands[manager].extend(["--provides", "--", package] if zypper_capability else ["--", name])
     response = run(commands[manager], check=False)
     if response.returncode:
         return None
@@ -309,7 +310,10 @@ def repository_version(manager, package):
             solvables = ET.fromstring(text).findall(".//solvable")
         except ET.ParseError:
             return None
-        versions = [item.get("edition") for item in solvables if item.get("name") == name or "(" in name]
+        versions = [item.get("edition") for item in solvables
+                    if (item.get("name") == name or zypper_capability)
+                    and item.get("repository") not in (None, "", "@System", "(System Packages)")
+                    and item.get("edition")]
         return versions[-1] if versions else None
     versions = [line.strip() for line in text.splitlines() if re.match(r"^\d", line)]
     return versions[-1] if versions else None
@@ -325,7 +329,9 @@ def resolve_packages(target, requirements, query=repository_version, python_vers
             version = python_version or sys.version_info[:2]
             candidates.append(f"python{version[0]}{version[1]}-{name[8:]}")
         for candidate in candidates:
-            version = query(target["manager"], candidate)
+            # Check the version of this virtual capability, not the provider RPM's edition.
+            query_name = requirement if target["manager"] == "zypper" and name == "python3" else candidate
+            version = query(target["manager"], query_name)
             if version:
                 exact = requirement[len(name):]
                 if exact.startswith("=") and not exact.startswith("==") and version != exact[1:]:

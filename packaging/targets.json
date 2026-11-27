@@ -63,7 +63,8 @@
       "id": "debian-13", "os_id": "debian", "version_ids": ["13"], "codename": "trixie",
       "image": "docker.io/library/debian:13", "manager": "apt", "format": "deb",
       "inherit": "debian-12", "headset_build": "source",
-      "runtime_replace": {"libgtk-3-0": "libgtk-3-0t64", "policykit-1": "polkitd"},
+      "runtime_replace": {"libgtk-3-0": "libgtk-3-0t64", "policykit-1": "polkitd", "pipewire-bin": "pipewire-bin (>= 1.4.10)"},
+      "audio": ["pipewire", "wireplumber"],
       "repository": {"kind": "obs-deb", "url": "https://download.opensuse.org/repositories/hardware:/razer/Debian_13", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/Debian_13/Release.key", "key": "obs_hardware"}
     },
     {
@@ -83,7 +84,7 @@
       "audio": ["pipewire", "pipewire-tools", "wireplumber"], "pulse": ["pipewire-pulseaudio"],
       "ratbag": ["ratbagd", "upower"], "razer": ["openrazer-meta", "dkms"],
       "headset": ["libhidapi-hidraw0"], "headset_build": "source",
-      "build": ["gcc", "gcc-c++", "make", "git", "nodejs22", "npm22", "cmake", "ninja", "pkg-config", "pkgconfig(webkit2gtk-4.1)", "gtk3-devel", "libayatana-appindicator3-devel", "librsvg-devel", "libopenssl-devel", "hidapi-devel", "rpm-build", "cpio", "zstd", "binutils", "desktop-file-utils", "sudo"],
+      "build": ["gcc", "gcc-c++", "make", "git", "cmake", "ninja", "pkgconf-pkg-config", "pkgconfig(webkit2gtk-4.1)", "gtk3-devel", "libayatana-appindicator3-devel", "librsvg-devel", "libopenssl-devel", "libhidapi-devel", "rpm-build", "cpio", "zstd", "binutils", "desktop-file-utils", "sudo"],
       "repository": {"kind": "obs-rpm", "url": "https://download.opensuse.org/repositories/hardware:/razer/openSUSE_Leap_16.0", "key_url": "https://download.opensuse.org/repositories/hardware:/razer/openSUSE_Leap_16.0/repodata/repomd.xml.key", "key": "obs_hardware"},
       "python_aliases": ["python313", "python312", "python311"]
     },

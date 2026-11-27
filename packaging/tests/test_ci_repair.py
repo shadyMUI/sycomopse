@@ -157,7 +157,7 @@ class MatrixGateTests(unittest.TestCase):
         self.info = {"host": {"security": {"rootless": True}, "cgroupVersion": "v2", "cgroupManager": "systemd"}}
         self.manifest = {"validation": {"native_smoke": "not-run"}}
 
-    def invoke(self, *arguments):
+    def invoke(self, *arguments, target_id="ubuntu-24.04"):
         def command(argv, **kwargs):
             self.commands.append(argv)
             output = ""
@@ -173,9 +173,9 @@ class MatrixGateTests(unittest.TestCase):
                 output = self.versions
             return SimpleNamespace(stdout=output, stderr="", returncode=0)
 
-        with patch.object(sys, "argv", ["matrix.py", "--target", "ubuntu-24.04", "--output", str(self.repo / "out"), *arguments]), \
+        with patch.object(sys, "argv", ["matrix.py", "--target", target_id, "--output", str(self.repo / "out"), *arguments]), \
                 patch.object(matrix, "HERE", self.packaging), patch.object(matrix, "require_build_user"), \
-                patch.object(matrix, "load_targets", return_value={"targets": [{"id": "ubuntu-24.04", "image": "docker.io/library/ubuntu:24.04"}]}), \
+                patch.object(matrix, "load_targets", return_value={"targets": [{"id": target_id, "image": "fixture:base"}]}), \
                 patch.object(matrix.os, "geteuid", return_value=1001, create=True), \
                 patch.object(matrix.os, "getegid", return_value=1001, create=True), \
                 patch.object(matrix, "run", side_effect=command), \
@@ -249,7 +249,17 @@ class MatrixGateTests(unittest.TestCase):
         self.assertEqual(values(build_run, "--user"), ["1000:1000"])
         self.assertEqual(values(build_run, "--userns"), ["keep-id:uid=1000,gid=1000"])
         self.assertEqual(values(build_run, "--cap-drop"), ["ALL"])
+        self.assertNotIn("--init", build_run)
         self.assertIn("not-run (quarantined)", self.output.getvalue())
+
+    def test_cachyos_reaps_build_children_without_changing_smoke_limits(self):
+        with self.assertRaisesRegex(common.PackagingError, "evidence"):
+            self.invoke("--engine", "podman", target_id="cachyos")
+        build_run = next(command for command in self.commands if "--output" in command)
+        smoke_run = next(command for command in self.commands if "--detach" in command)
+        self.assertIn("--init", build_run)
+        self.assertNotIn("--init", smoke_run)
+        self.assertEqual(values(smoke_run, "--pids-limit"), ["512"])
 
     def test_zero_smoke_exit_without_manifest_evidence_is_not_success(self):
         with self.assertRaisesRegex(common.PackagingError, "evidence"):
@@ -438,8 +448,13 @@ class SDKDependencyTests(unittest.TestCase):
                 patch.object(Path, "is_file", lambda path: path == Path("/run/.containerenv")), \
                 patch.object(dependencies, "load_targets", return_value={"targets": [target]}), \
                 patch.object(dependencies, "resolve_packages", side_effect=resolve), \
+                patch.object(dependencies, "prepare_trixie_pipewire") as prepare_pipewire, \
                 patch.object(dependencies, "run") as executed:
             dependencies.main()
+            if target_id == "debian-13":
+                prepare_pipewire.assert_called_once_with(runtime_only)
+            else:
+                prepare_pipewire.assert_not_called()
             return executed.call_args.args[0]
 
     def test_sdk_audio_and_lua_packages_are_container_build_dependencies(self):
@@ -456,29 +471,136 @@ class SDKDependencyTests(unittest.TestCase):
                          ["dnf", "install", "--assumeyes", "python3", "util-linux"])
         self.assertNotIn("util-linux", self.invoke(False, "fedora-44", "dnf"))
 
+    def test_bookworm_llvm_is_only_a_debian_12_sdk_dependency(self):
+        toolchain = {"clang-19", "libc++-19-dev", "libc++abi-19-dev"}
+        self.assertTrue(toolchain.issubset(self.invoke(False, "debian-12")))
+        self.assertFalse(toolchain.intersection(self.invoke(True, "debian-12")))
+        self.assertFalse(toolchain.intersection(self.invoke(False, "debian-13")))
+        self.invoke(True, "debian-13")
 
-class UbuntuSmokePolicyTests(unittest.TestCase):
+
+class Debian13PipeWireTests(unittest.TestCase):
+    def test_signed_backports_stack_and_build_only_headers(self):
+        for runtime_only in (False, True):
+            with self.subTest(runtime_only=runtime_only), tempfile.TemporaryDirectory() as directory:
+                sources = Path(directory)
+                result = SimpleNamespace(stdout="1.6.9-2~bpo13+1")
+                with patch.object(dependencies, "run", return_value=result) as command, \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    dependencies.prepare_trixie_pipewire(runtime_only, sources)
+                text = (sources / "peripheral-hub-ci-backports.sources").read_text()
+                self.assertIn("URIs: https://deb.debian.org/debian\nSuites: trixie-backports\n", text)
+                self.assertIn("Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n", text)
+                update, install, verify = (call.args[0] for call in command.call_args_list)
+                self.assertEqual(update, ["apt-get", "update"])
+                self.assertEqual(values(install, "-t"), ["trixie-backports"])
+                for package in ("pipewire", "pipewire-bin", "libpipewire-0.3-0t64", "libpipewire-0.3-modules", "libspa-0.2-modules"):
+                    self.assertIn(package, install)
+                for header in ("libpipewire-0.3-dev", "libspa-0.2-dev"):
+                    self.assertEqual(header in install, not runtime_only)
+                self.assertEqual(verify, ["dpkg-query", "-W", "-f=${Version}", "pipewire-bin"])
+
+    def test_stock_pipewire_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(dependencies, "run", return_value=SimpleNamespace(stdout="1.4.2-1")), \
+                self.assertRaisesRegex(common.PackagingError, "confirmed mute readback"):
+            dependencies.prepare_trixie_pipewire(True, Path(directory))
+
+    def test_debian_13_bundle_requires_fixed_runtime(self):
+        targets = {target["id"]: target for target in common.load_targets()["targets"]}
+        def resolve(target, requirements):
+            return [{"name": common.package_name(requirement), "requirement": requirement}
+                    for requirement in dict.fromkeys(requirements)], []
+        with patch.object(build, "resolve_packages", side_effect=resolve):
+            trixie, _ = build.native_requirements(targets["debian-13"])
+            bookworm, _ = build.native_requirements(targets["debian-12"])
+        self.assertIn("pipewire-bin (>= 1.4.10)", trixie)
+        self.assertIn("pipewire", trixie)
+        self.assertNotIn("pipewire-bin", trixie)
+        self.assertIn("pipewire-bin", bookworm)
+
+
+class ZypperDependencyTests(unittest.TestCase):
+    def search_result(self, rows, status=0):
+        xml = f"<stream><search-result><solvable-list>{rows}</solvable-list></search-result></stream>"
+        return patch.object(common, "run", return_value=SimpleNamespace(returncode=status, stdout=xml))
+
+    def test_versioned_python_capability_preserves_native_requirement(self):
+        requirement = "python3 >= 3.10"
+        for name in ("python3", "python313"):
+            rows = f'<solvable status="installed" name="{name}" edition="3.13.18-2.1" repository="repo-oss"/>'
+            with self.subTest(name=name), self.search_result(rows) as search:
+                resolved, missing = common.resolve_packages({"manager": "zypper"}, [requirement])
+                self.assertEqual(missing, [])
+                self.assertEqual(resolved, [{"name": "python3", "version": "3.13.18-2.1", "requirement": requirement}])
+                argv = search.call_args.args[0]
+                self.assertIn("--disable-system-resolvables", argv)
+                self.assertEqual(argv[-3:], ["--provides", "--", requirement])
+
+    def test_exact_rpm_name_rejects_local_only_and_alternate_names(self):
+        rows = ('<solvable name="libhidapi-devel" edition="0.15" repository="(System Packages)"/>'
+                '<solvable name="libhidapi-hidraw0" edition="0.15" repository="repo-oss"/>')
+        with self.search_result(rows) as search:
+            self.assertIsNone(common.repository_version("zypper", "libhidapi-devel"))
+            self.assertEqual(search.call_args.args[0][-2:], ["--", "libhidapi-devel"])
+            self.assertNotIn("--provides", search.call_args.args[0])
+
+    def test_missing_capability_and_malformed_xml_are_rejected(self):
+        with self.search_result("", status=104):
+            self.assertIsNone(common.repository_version("zypper", "python3 >= 99.0"))
+        with patch.object(common, "run", return_value=SimpleNamespace(returncode=0, stdout="<invalid")):
+            self.assertIsNone(common.repository_version("zypper", "pkgconfig(webkit2gtk-4.1)"))
+
+    def test_exact_kernel_edition_still_required(self):
+        rows = '<solvable name="kernel-default-devel" edition="6.18.1" repository="repo-oss"/>'
+        with self.search_result(rows):
+            self.assertEqual(common.resolve_packages({"manager": "zypper"}, ["kernel-default-devel=6.18.0"]),
+                             ([], ["kernel-default-devel"]))
+
+
+class ArchBuildDiagnosticsTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "resource limits describe the Linux build")
+    def test_makepkg_counters_can_be_collected_without_forking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pids.current").write_text("32\n")
+            (root / "pids.max").write_text("32\n")
+            (root / "pids.events").write_text("max 7\n")
+            (root / "1").mkdir()
+            (root / "1/stat").write_text("1 (child) Z 0")
+            (root / "2").mkdir()  # A process can exit before its stat is read.
+            report = build.makepkg_process_limits(root, root)
+            self.assertEqual(report["cgroup"], {"pids.current": "32", "pids.max": "32", "pids.events": "max 7"})
+            self.assertEqual(report["process_states"], {"Z": 1})
+            self.assertEqual(len(report["rlimit_nproc"]), 2)
+
+
+class AptSmokePolicyTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "policy-rc.d is a Linux shell script")
     def test_stock_policy_allows_only_package_service(self):
-        with tempfile.TemporaryDirectory() as directory:
-            policy = Path(directory) / "policy-rc.d"
-            policy.write_bytes(b"#!/bin/sh\nexit 101\n")
-            with contextlib.redirect_stdout(io.StringIO()):
-                dependencies.allow_ubuntu_smoke_autostart(policy)
-            for unit, expected in ((common.ENGINE, 0), ("systemd-udevd.service", 101),
-                                   (common.ENGINE + ".other", 101)):
-                with self.subTest(unit=unit):
-                    result = subprocess.run(["sh", str(policy), unit, "start"], check=False)
-                    self.assertEqual(result.returncode, expected)
+        debian = (b'#!/bin/sh\n\n# For most Docker users, "apt-get install" only happens during "docker build",\n'
+                  b"# where starting services doesn't work and often fails in humorous ways. This\n"
+                  b"# prevents those failures by stopping the services from attempting to start.\n\nexit 101\n")
+        for stock_policy in (b"#!/bin/sh\nexit 101\n", debian):
+            with tempfile.TemporaryDirectory() as directory:
+                policy = Path(directory) / "policy-rc.d"
+                policy.write_bytes(stock_policy)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    dependencies.allow_apt_smoke_autostart(policy)
+                for unit, expected in ((common.ENGINE, 0), ("systemd-udevd.service", 101),
+                                       (common.ENGINE + ".other", 101)):
+                    with self.subTest(unit=unit, policy=common.digest(stock_policy)):
+                        result = subprocess.run(["sh", str(policy), unit, "start"], check=False)
+                        self.assertEqual(result.returncode, expected)
 
     def test_custom_and_missing_policies_are_left_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:
             policy = Path(directory) / "policy-rc.d"
-            dependencies.allow_ubuntu_smoke_autostart(policy)
+            dependencies.allow_apt_smoke_autostart(policy)
             self.assertFalse(policy.exists())
             original = b"#!/bin/sh\n# Site policy\nexit 101\n"
             policy.write_bytes(original)
-            dependencies.allow_ubuntu_smoke_autostart(policy)
+            dependencies.allow_apt_smoke_autostart(policy)
             self.assertEqual(policy.read_bytes(), original)
 
 

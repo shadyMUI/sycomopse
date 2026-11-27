@@ -97,9 +97,11 @@ def main():
         return
     output.mkdir(parents=True, exist_ok=True)
     userns = ["--userns", "keep-id:uid=1000,gid=1000"] if args.engine == "podman" else []
+    # Reap orphaned build children rather than accumulating zombies under Python PID 1.
+    reaper = ["--init"] if target["id"] == "cachyos" else []
     preparation = " (Podman may first copy image layers)" if userns else ""
     print(f"Starting {target['id']} application build{preparation} ...", file=sys.stderr, flush=True)
-    run([*runtime, "run", "--rm", "--platform", "linux/amd64", *userns, "--user", f"{uid}:{gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--volume", f"{repo}:/workspace:rw", "--volume", f"{output}:/artifacts:rw", "--env", f"PH_BUILD_IMAGE_DIGEST={match[1]}", image, "--target", target["id"], "--output", "/artifacts"], capture=False, timeout=7200)
+    run([*runtime, "run", "--rm", *reaper, "--platform", "linux/amd64", *userns, "--user", f"{uid}:{gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--volume", f"{repo}:/workspace:rw", "--volume", f"{output}:/artifacts:rw", "--env", f"PH_BUILD_IMAGE_DIGEST={match[1]}", image, "--target", target["id"], "--output", "/artifacts"], capture=False, timeout=7200)
     bundle = output / f"peripheral-hub-0.1.0-{target['id']}-x86_64"
     if not args.skip_smoke:
         smoke_image = "peripheral-hub-smoke:" + target["id"]
